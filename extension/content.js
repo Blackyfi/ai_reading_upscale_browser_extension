@@ -13,6 +13,8 @@ const CONFIG = {
 let isEnabled = CONFIG.enabledByDefault;
 let processedImages = new Set();
 let imageCache = new Map();
+let imageQueue = [];
+let isProcessingQueue = false;
 
 // Manga/Manhwa site patterns
 const MANGA_SITES = [
@@ -245,39 +247,81 @@ async function processImage(img) {
     return;
   }
 
-  // Mark as processed
-  processedImages.add(imageId);
+  // Skip if already in queue
+  if (imageQueue.some(item => item.imageId === imageId)) {
+    console.log('[SKIP] Already in queue:', img.src);
+    return;
+  }
 
+  // Add to queue
+  console.log('[QUEUE] Adding image to queue:', img.src);
+  imageQueue.push({ img, imageId });
+  
   // Add loading indicator
   addLoadingIndicator(img);
+  
+  // Start processing queue if not already running
+  processQueue();
+}
 
-  try {
-    // Request upscaling from background script
-    const response = await chrome.runtime.sendMessage({
-      type: 'UPSCALE_IMAGE',
-      imageUrl: img.src,
-      imageId: imageId
-    });
-
-    if (response.success) {
-      // Replace image with upscaled version
-      replaceImage(img, response.dataUrl);
-      removeLoadingIndicator(img);
-
-      // Cache the result
-      imageCache.set(imageId, response.dataUrl);
-
-      console.log(`Image upscaled: ${imageId}`);
-    } else {
-      console.error(`Failed to upscale image: ${response.error}`);
-      removeLoadingIndicator(img);
-      processedImages.delete(imageId);
-    }
-  } catch (error) {
-    console.error('Error processing image:', error);
-    removeLoadingIndicator(img);
-    processedImages.delete(imageId);
+/**
+ * Process the image queue sequentially
+ */
+async function processQueue() {
+  // If already processing, exit
+  if (isProcessingQueue) {
+    return;
   }
+  
+  // If queue is empty, exit
+  if (imageQueue.length === 0) {
+    return;
+  }
+  
+  isProcessingQueue = true;
+  
+  while (imageQueue.length > 0) {
+    const { img, imageId } = imageQueue.shift();
+    
+    console.log(`[PROCESSING] Processing image ${imageId} (${imageQueue.length} remaining in queue)`);
+    
+    try {
+      // Request upscaling from background script
+      const response = await chrome.runtime.sendMessage({
+        type: 'UPSCALE_IMAGE',
+        imageUrl: img.src,
+        imageId: imageId
+      });
+
+      if (response.success) {
+        // Mark as processed ONLY after successful upscaling
+        processedImages.add(imageId);
+        
+        // Replace image with upscaled version
+        replaceImage(img, response.dataUrl);
+        removeLoadingIndicator(img);
+
+        // Cache the result
+        imageCache.set(imageId, response.dataUrl);
+
+        console.log(`[SUCCESS] Image upscaled: ${imageId}`);
+      } else {
+        console.error(`[ERROR] Failed to upscale image: ${response.error}`);
+        removeLoadingIndicator(img);
+        // Don't mark as processed so it can be retried
+      }
+    } catch (error) {
+      console.error('[ERROR] Error processing image:', error);
+      removeLoadingIndicator(img);
+      // Don't mark as processed so it can be retried
+    }
+    
+    // Small delay between images to avoid overwhelming the server
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  
+  isProcessingQueue = false;
+  console.log('[QUEUE] All images processed');
 }
 
 /**
@@ -289,25 +333,30 @@ function meetsImageCriteria(img) {
 
   // If dimensions are not available yet (lazy-loaded images), wait for load
   if (width === 0 || height === 0 || !img.complete) {
-    img.addEventListener('load', () => processImage(img), { once: true });
+    // Check if we already added a load listener to avoid duplicates
+    if (!img.dataset.loadListenerAdded) {
+      img.dataset.loadListenerAdded = 'true';
+      img.addEventListener('load', () => {
+        console.log('[LOAD EVENT] Image loaded, reprocessing:', img.src, 'New size:', img.naturalWidth, 'x', img.naturalHeight);
+        delete img.dataset.loadListenerAdded; // Remove marker so it can be processed
+        processImage(img);
+      }, { once: true });
+    }
     return false;
   }
 
   // Check size constraints
   if (width < CONFIG.minImageWidth || height < CONFIG.minImageHeight) {
+    console.log('[SKIP] Does not meet minImageWidth criteria:', img.src, 'Size:', img.naturalWidth, 'x', img.naturalHeight, 'Min required:', CONFIG.minImageWidth, 'x', CONFIG.minImageHeight);
     return false;
   }
 
   if (width > CONFIG.maxImageWidth || height > CONFIG.maxImageHeight) {
+    console.log('[SKIP] Does not meet maxImageWidth criteria:', img.src, 'Size:', img.naturalWidth, 'x', img.naturalHeight, 'Max allowed:', CONFIG.maxImageWidth, 'x', CONFIG.maxImageHeight);
     return false;
   }
 
-  // Check aspect ratio (typical for manga/manhwa)
-  const aspectRatio = width / height;
-  if (aspectRatio < 0.2 || aspectRatio > 5) {
-    return false;
-  }
-
+  console.log('[SIZE OK] Image meets criteria:', img.src, 'Size:', width, 'x', height);
   return true;
 }
 
@@ -315,8 +364,8 @@ function meetsImageCriteria(img) {
  * Generate unique ID for image
  */
 function getImageId(img) {
-  // Use src as base, but could use hash of image data for more accuracy
-  return btoa(img.src).substring(0, 32);
+  // Use full base64 encoded src for unique ID
+  return btoa(img.src);
 }
 
 /**
