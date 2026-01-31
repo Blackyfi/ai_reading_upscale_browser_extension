@@ -1,3 +1,8 @@
+# PyTorch with CUDA 12.8 (Required for RTX 5070 Ti / Blackwell architecture)
+# Install with: python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+# Version: torch==2.10.0+cu128, torchvision==0.25.0+cu128, torchaudio==2.10.0+cu128
+# Note: MUST use CUDA 12.8+ for RTX 50-series GPUs. Driver version 570+ required.
+
 flask>=3.0.0
 flask-cors>=4.0.0
 basicsr>=1.4.2
