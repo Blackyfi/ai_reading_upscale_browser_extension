@@ -12,9 +12,9 @@ Before you begin, ensure you have:
 - **Git** - [Download](https://git-scm.com/downloads)
 
 ### Hardware Requirements
-- **GPU**: NVIDIA GPU with CUDA support (highly recommended)
+- **GPU**: NVIDIA GPU with CUDA support (REQUIRED)
   - RTX 5070 Ti or equivalent for optimal performance
-  - CPU-only mode is supported but much slower
+  - GPU is mandatory - CPU-only mode is not supported
 - **RAM**: At least 8GB (16GB recommended)
 - **Storage**: 2GB free space for dependencies and cache
 
@@ -76,7 +76,7 @@ Install the required Python packages:
 pip install -r requirements.txt
 ```
 
-### 2.4 Install PyTorch with CUDA (for GPU support)
+### 2.4 Install PyTorch with CUDA (REQUIRED)
 
 Check your CUDA version:
 ```bash
@@ -95,10 +95,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 ```
 
-**For CPU only (not recommended):**
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-```
+**Note:** CPU-only installation is not supported. An NVIDIA GPU with CUDA is required.
 
 ### 2.5 Verify Installation
 

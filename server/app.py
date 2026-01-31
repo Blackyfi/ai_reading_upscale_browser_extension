@@ -37,8 +37,23 @@ upscaler = None
 def init_upscaler():
     """Initialize RealESRGAN model"""
     global upscaler
+
+    # Check for GPU availability
+    if not torch.cuda.is_available():
+        logger.error("=" * 60)
+        logger.error("ERROR: CUDA GPU is required but not available!")
+        logger.error("This application requires an NVIDIA GPU with CUDA support.")
+        logger.error("Please ensure:")
+        logger.error("  1. You have an NVIDIA GPU installed")
+        logger.error("  2. NVIDIA drivers are installed")
+        logger.error("  3. CUDA toolkit is installed")
+        logger.error("  4. PyTorch with CUDA support is installed")
+        logger.error("=" * 60)
+        return False
+
     try:
         logger.info("Loading RealESRGAN model...")
+        logger.info(f"GPU detected: {torch.cuda.get_device_name(0)}")
 
         # Define model architecture
         model = RRDBNet(
@@ -50,7 +65,7 @@ def init_upscaler():
             scale=4
         )
 
-        # Initialize upscaler
+        # Initialize upscaler with GPU
         upscaler = RealESRGANer(
             scale=4,
             model_path=str(MODEL_PATH),
@@ -58,11 +73,11 @@ def init_upscaler():
             tile=0,  # 0 for no tiling, adjust if GPU memory is limited
             tile_pad=10,
             pre_pad=0,
-            half=True if torch.cuda.is_available() else False,
-            device='cuda' if torch.cuda.is_available() else 'cpu'
+            half=True,
+            device='cuda'
         )
 
-        logger.info(f"Model loaded successfully on {upscaler.device}")
+        logger.info(f"Model loaded successfully on GPU")
         return True
     except Exception as e:
         logger.error(f"Failed to load model: {e}")

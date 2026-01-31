@@ -35,17 +35,31 @@ upscaler = None
 def init_upscaler():
     """Initialize RealESRGAN model"""
     global upscaler
+
+    # Check for GPU availability
+    if not torch.cuda.is_available():
+        logger.error("=" * 60)
+        logger.error("ERROR: CUDA GPU is required but not available!")
+        logger.error("This application requires an NVIDIA GPU with CUDA support.")
+        logger.error("Please ensure:")
+        logger.error("  1. You have an NVIDIA GPU installed")
+        logger.error("  2. NVIDIA drivers are installed")
+        logger.error("  3. CUDA toolkit is installed")
+        logger.error("  4. PyTorch with CUDA support is installed")
+        logger.error("=" * 60)
+        return False
+
     try:
-        logger.info("Attempting to load RealESRGAN model...")
+        logger.info("Loading RealESRGAN model...")
+        logger.info(f"GPU detected: {torch.cuda.get_device_name(0)}")
 
         # Try to import required modules
         try:
             from realesrgan import RealESRGANer
             from basicsr.archs.rrdbnet_arch import RRDBNet
         except ImportError as e:
-            logger.warning(f"Required libraries not found: {e}")
-            logger.warning("Server will run in demo mode. Install basicsr and realesrgan for full functionality.")
-            logger.warning("Run: pip install basicsr realesrgan")
+            logger.error(f"Required libraries not found: {e}")
+            logger.error("Install basicsr and realesrgan: pip install basicsr realesrgan")
             return False
 
         # Define model architecture
@@ -58,7 +72,7 @@ def init_upscaler():
             scale=4
         )
 
-        # Initialize upscaler
+        # Initialize upscaler with GPU
         upscaler = RealESRGANer(
             scale=4,
             model_path=str(MODEL_PATH),
@@ -66,15 +80,14 @@ def init_upscaler():
             tile=0,  # 0 for no tiling, adjust if GPU memory is limited
             tile_pad=10,
             pre_pad=0,
-            half=True if torch.cuda.is_available() else False,
-            device='cuda' if torch.cuda.is_available() else 'cpu'
+            half=True,
+            device='cuda'
         )
 
-        logger.info(f"Model loaded successfully on {upscaler.device}")
+        logger.info(f"Model loaded successfully on GPU")
         return True
     except Exception as e:
         logger.error(f"Failed to load model: {e}")
-        logger.warning("Server running in demo mode")
         return False
 
 
@@ -88,11 +101,6 @@ def get_image_hash(image_bytes):
     return hashlib.md5(image_bytes).hexdigest()
 
 
-def simple_upscale(image, scale=4):
-    """Simple upscaling using PIL (fallback when RealESRGAN not available)"""
-    width, height = image.size
-    new_size = (width * scale, height * scale)
-    return image.resize(new_size, Image.Resampling.LANCZOS)
 
 
 @app.route('/health', methods=['GET'])
@@ -102,17 +110,19 @@ def health_check():
     model_loaded = upscaler is not None
 
     return jsonify({
-        'status': 'healthy',
+        'status': 'healthy' if model_loaded else 'unhealthy',
         'gpu_available': gpu_available,
         'gpu_name': torch.cuda.get_device_name(0) if gpu_available else None,
-        'model_loaded': model_loaded,
-        'mode': 'AI upscaling' if model_loaded else 'demo mode (PIL upscaling)'
+        'model_loaded': model_loaded
     })
 
 
 @app.route('/upscale', methods=['POST'])
 def upscale_image():
     """Upscale image endpoint"""
+    if upscaler is None:
+        return jsonify({'error': 'Model not loaded'}), 500
+
     # Check if image file is in request
     if 'image' not in request.files:
         return jsonify({'error': 'No image file provided'}), 400
@@ -151,19 +161,16 @@ def upscale_image():
         if image.mode != 'RGB':
             image = image.convert('RGB')
 
+        # Convert to numpy array
+        import numpy as np
+        img_np = np.array(image)
+
         # Upscale
         logger.info(f"Upscaling image {cache_key}...")
+        output, _ = upscaler.enhance(img_np, outscale=4)
 
-        if upscaler is not None:
-            # Use AI upscaling
-            import numpy as np
-            img_np = np.array(image)
-            output, _ = upscaler.enhance(img_np, outscale=4)
-            output_image = Image.fromarray(output)
-        else:
-            # Use simple PIL upscaling (demo mode)
-            logger.info("Using PIL upscaling (demo mode)")
-            output_image = simple_upscale(image, scale=4)
+        # Convert back to PIL Image
+        output_image = Image.fromarray(output)
 
         # Save to cache
         output_image.save(cache_path, 'PNG')
@@ -215,15 +222,11 @@ def get_stats():
 
 if __name__ == '__main__':
     logger.info("Starting AI Reading Upscale Server...")
-    logger.info("=" * 60)
 
-    # Initialize model (will fall back to demo mode if dependencies missing)
-    init_upscaler()
-
-    logger.info("=" * 60)
-    logger.info("Server starting on http://127.0.0.1:5000")
-    logger.info("Press Ctrl+C to stop the server")
-    logger.info("=" * 60)
+    # Initialize model
+    if not init_upscaler():
+        logger.error("Failed to initialize upscaler. Exiting.")
+        exit(1)
 
     # Run Flask app
     app.run(host='127.0.0.1', port=5000, debug=False, threaded=True)
