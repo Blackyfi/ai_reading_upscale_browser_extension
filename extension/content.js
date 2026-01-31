@@ -5,8 +5,8 @@ const CONFIG = {
   minImageWidth: 200,
   minImageHeight: 200,
   maxImageWidth: 2000,
-  maxImageHeight: 4000,
-  enabledByDefault: true
+  maxImageHeight: 20000,  // Increased for manhwa/webtoons (typically 15000-16000px tall)
+  enabledByDefault: false
 };
 
 // State
@@ -25,7 +25,8 @@ const MANGA_SITES = [
   'readm.org',
   'mangahere.cc',
   'mangareader.net',
-  'mangapark.net'
+  'mangapark.net',
+  'asuracomic.net'
 ];
 
 // Initialize
@@ -112,20 +113,137 @@ function detectAndProcessImages() {
 }
 
 /**
+ * Check if image is animated (GIF, APNG, WebP animation)
+ */
+function isAnimatedImage(src) {
+  if (!src) return false;
+
+  const lowerSrc = src.toLowerCase();
+
+  // Block GIF files
+  if (lowerSrc.endsWith('.gif') || lowerSrc.includes('.gif?')) {
+    return true;
+  }
+
+  // Block common animated formats
+  if (lowerSrc.includes('/gif/') || lowerSrc.includes('emoji') || lowerSrc.includes('spinner')) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Check if image is a UI element (icon, logo, profile picture, etc.)
+ */
+function isUIElement(img) {
+  if (!img) return false;
+
+  const src = img.src ? img.src.toLowerCase() : '';
+  const alt = img.alt ? img.alt.toLowerCase() : '';
+  const className = img.className ? img.className.toLowerCase() : '';
+
+  // Check for common UI element patterns in src
+  const uiPatterns = [
+    'icon', 'logo', 'avatar', 'profile', 'button', 'banner',
+    'badge', 'emoji', 'spinner', 'loading', 'placeholder',
+    'thumbnail', 'arrow', 'chevron', 'menu', 'nav', 'header',
+    'footer', 'sidebar', 'ad', 'advertisement'
+  ];
+
+  for (const pattern of uiPatterns) {
+    if (src.includes(pattern) || alt.includes(pattern) || className.includes(pattern)) {
+      return true;
+    }
+  }
+
+  // Check for profile pictures and UI images by class
+  if (className.includes('rounded-full') || className.includes('rounded-circle')) {
+    return true;
+  }
+
+  // Check if alt text indicates it's not a manga page
+  if (alt && !alt.includes('chapter') && !alt.includes('page') && !alt.includes('comic')) {
+    // If alt exists but doesn't mention chapter/page/comic, it might be UI
+    const nonMangaAltPatterns = ['user', 'profile', 'close', 'menu', 'search'];
+    for (const pattern of nonMangaAltPatterns) {
+      if (alt.includes(pattern)) {
+        return true;
+      }
+    }
+  }
+
+  // For asuracomic.net, only process images that are clearly manga panels
+  if (window.location.hostname.includes('asuracomic.net')) {
+    // Check if the src is from the storage/media path (manga images)
+    const isMangaPath = src.includes('/storage/media/');
+
+    // If it's from /storage/media/, check if it's a chapter page (not a thumbnail/cover)
+    if (isMangaPath) {
+      // Chapter page images have patterns like:
+      // - /storage/media/<ID>/<number>.jpg (e.g., /storage/media/411950/00.jpg)
+      // - /storage/media/<ID>/conversions/<number>-optimized.webp
+      const isChapterPage = /\/storage\/media\/\d+\/(\d{2}\.(jpg|png|webp)|conversions\/\d{2}-optimized\.(jpg|png|webp))/.test(src);
+
+      // Also check alt text for "chapter page"
+      const hasChapterAlt = alt.includes('chapter page');
+
+      console.log('[ASURA DEBUG] Image:', src, '| isChapterPage:', isChapterPage, '| hasChapterAlt:', hasChapterAlt);
+
+      // If it matches the chapter page pattern OR has chapter page alt text, it's NOT a UI element
+      if (isChapterPage || hasChapterAlt) {
+        console.log('[ASURA] Processing chapter image:', src);
+        return false;
+      }
+
+      // If it's from storage/media but not a chapter page, it's likely a cover/thumbnail (UI element)
+      console.log('[ASURA] Skipping non-chapter image:', src);
+      return true;
+    }
+
+    // If not from /storage/media/, it's likely a UI element
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Process individual image
  */
 async function processImage(img) {
   if (!isEnabled) return;
   if (!img.src) return;
 
+  // Skip GIF files and other animated formats
+  if (isAnimatedImage(img.src)) {
+    console.log('[SKIP] Animated image:', img.src);
+    return;
+  }
+
+  // Skip UI elements, icons, and other non-manga images
+  if (isUIElement(img)) {
+    console.log('[SKIP] UI element:', img.src);
+    return;
+  }
+
+  console.log('[DETECT] Found manga image:', img.src, 'alt:', img.alt);
+
   // Generate unique ID for this image
   const imageId = getImageId(img);
 
-  // Skip if already processed
-  if (processedImages.has(imageId)) return;
+  // Check if image meets size criteria BEFORE checking if processed
+  // This allows images to be re-checked after they load
+  if (!meetsImageCriteria(img)) {
+    console.log('[SKIP] Does not meet size criteria:', img.src, 'Size:', img.naturalWidth, 'x', img.naturalHeight);
+    return;
+  }
 
-  // Check if image meets size criteria
-  if (!meetsImageCriteria(img)) return;
+  // Skip if already processed (after size check, so lazy-loaded images can be re-evaluated)
+  if (processedImages.has(imageId)) {
+    console.log('[SKIP] Already processed:', img.src);
+    return;
+  }
 
   // Mark as processed
   processedImages.add(imageId);
@@ -166,14 +284,14 @@ async function processImage(img) {
  * Check if image meets criteria for upscaling
  */
 function meetsImageCriteria(img) {
-  // Wait for image to load
-  if (!img.complete) {
-    img.addEventListener('load', () => processImage(img));
-    return false;
-  }
-
   const width = img.naturalWidth;
   const height = img.naturalHeight;
+
+  // If dimensions are not available yet (lazy-loaded images), wait for load
+  if (width === 0 || height === 0 || !img.complete) {
+    img.addEventListener('load', () => processImage(img), { once: true });
+    return false;
+  }
 
   // Check size constraints
   if (width < CONFIG.minImageWidth || height < CONFIG.minImageHeight) {

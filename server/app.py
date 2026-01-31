@@ -71,7 +71,7 @@ def init_upscaler():
             scale=4,
             model_path=str(MODEL_PATH),
             model=model,
-            tile=0,  # 0 for no tiling, adjust if GPU memory is limited
+            tile=512,  # Process in 512x512 chunks to reduce memory usage
             tile_pad=10,
             pre_pad=0,
             half=True,
@@ -159,13 +159,20 @@ def upscale_image():
 
         # Upscale
         logger.info(f"Upscaling image {cache_key}...")
-        output, _ = upscaler.enhance(img_np, outscale=4)
+        output, _ = upscaler.enhance(img_np, outscale=2)
 
         # Convert back to PIL Image
         output_image = Image.fromarray(output)
 
         # Save to cache
         output_image.save(cache_path, 'PNG')
+
+        # Clean up GPU memory
+        import gc
+        del output
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
 
         elapsed_time = time.time() - start_time
         logger.info(f"Upscaling completed in {elapsed_time:.2f} seconds")
