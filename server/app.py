@@ -20,9 +20,10 @@ app = Flask(__name__)
 CORS(app)  # Enable CORS for Chrome extension
 
 # Configuration
-UPLOAD_FOLDER = Path('uploads')
-CACHE_FOLDER = Path('cache')
-MODEL_PATH = Path('../upscale_model/RealESRGAN_x4plus_anime_6B.pth')
+SCRIPT_DIR = Path(__file__).parent
+UPLOAD_FOLDER = SCRIPT_DIR / 'uploads'
+CACHE_FOLDER = SCRIPT_DIR / 'cache'
+MODEL_PATH = SCRIPT_DIR.parent / 'upscale_model' / 'RealESRGAN_x4plus_anime_6B.pth'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
