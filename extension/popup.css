@@ -248,20 +248,138 @@ input:checked + .slider:before {
 
 /* Info Section */
 .info-section {
+  display: none;
+}
+
+/* Tabs Section */
+.tabs-section {
+  background: white;
+  padding: 0;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.tabs-header {
+  display: flex;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 12px 16px;
+  background: white;
+  border: none;
+  font-size: 13px;
+  font-weight: 500;
+  color: #666;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+}
+
+.tab-btn:hover {
+  color: #333;
   background: #f9f9f9;
 }
 
-.info-box {
+.tab-btn.active {
+  color: #667eea;
+  border-bottom-color: #667eea;
   background: white;
-  border-left: 3px solid #667eea;
-  padding: 10px;
-  border-radius: 4px;
 }
 
-.info-text {
+.tab-content {
+  display: none;
+  animation: fadeIn 0.2s ease-in;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Page Stats Section */
+.page-stats-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.page-stats-item:last-child {
+  border-bottom: none;
+}
+
+/* Progress Section */
+.progress-section {
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid #e0e0e0;
+}
+
+.progress-section h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: #555;
+}
+
+/* Session Stats Grid */
+.session-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+/* Stats History */
+.stats-history {
+  margin-top: 15px;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 10px;
+  background: #f9f9f9;
+}
+
+.stats-history-item {
+  background: white;
+  padding: 10px;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  border-left: 3px solid #667eea;
   font-size: 12px;
+}
+
+.stats-history-item:last-child {
+  margin-bottom: 0;
+}
+
+.stats-history-date {
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 4px;
+}
+
+.stats-history-data {
   color: #666;
+  font-size: 11px;
   line-height: 1.5;
+}
+
+.no-stats {
+  text-align: center;
+  color: #999;
+  padding: 20px 10px;
+  font-size: 12px;
 }
 
 /* Footer */

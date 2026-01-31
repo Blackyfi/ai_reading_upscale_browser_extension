@@ -34,23 +34,85 @@
       </div>
     </section>
 
-    <section class="stats-section">
-      <h2>Statistics</h2>
-      <div class="stats-grid">
-        <div class="stat-item">
-          <span class="stat-value" id="cacheCount">-</span>
-          <span class="stat-label">Cached Images</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-value" id="cacheSize">-</span>
-          <span class="stat-label">Cache Size</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-value" id="queueSize">-</span>
-          <span class="stat-label">Processing Queue</span>
-        </div>
+    <section class="tabs-section">
+      <div class="tabs-header">
+        <button class="tab-btn active" data-tab="current-page">Current Page</button>
+        <button class="tab-btn" data-tab="statistics">Statistics</button>
       </div>
     </section>
+
+    <!-- Tab 1: Current Page Stats -->
+    <div id="current-page-tab" class="tab-content active">
+      <section class="stats-section">
+        <h2>Page Statistics</h2>
+        <div class="page-stats-item">
+          <span class="stat-label">Images Detected:</span>
+          <span class="stat-value" id="pageImagesDetected">0</span>
+        </div>
+        <div class="page-stats-item">
+          <span class="stat-label">Images Upscaled:</span>
+          <span class="stat-value" id="pageImagesUpscaled">0</span>
+        </div>
+        
+        <div class="progress-section">
+          <h3>Overall Progress</h3>
+          <div class="progress-bar-container" id="pageProgressContainer">
+            <div class="progress-bar" id="pageProgressBar" style="width: 0%">
+              <span class="progress-text" id="pageProgressText">0%</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="queue-section" id="pageQueueSection" style="display: none;">
+          <h3>Processing Queue</h3>
+          <div class="queue-list" id="pageQueueList">
+            <!-- Queue items will be dynamically inserted here -->
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Tab 2: Statistics History -->
+    <div id="statistics-tab" class="tab-content">
+      <section class="stats-section">
+        <h2>Server Statistics</h2>
+        <div class="stats-grid">
+          <div class="stat-item">
+            <span class="stat-value" id="cacheCount">-</span>
+            <span class="stat-label">Cached Images</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-value" id="cacheSize">-</span>
+            <span class="stat-label">Cache Size</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-value" id="queueSize">-</span>
+            <span class="stat-label">Processing Queue</span>
+          </div>
+        </div>
+
+        <h2 style="margin-top: 15px;">Session Statistics</h2>
+        <div class="session-stats-grid">
+          <div class="stat-item">
+            <span class="stat-value" id="totalImagesUpscaled">0</span>
+            <span class="stat-label">Total Upscaled</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-value" id="avgUpscaleTime">-</span>
+            <span class="stat-label">Avg Upscale Time</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-value" id="totalSessionTime">-</span>
+            <span class="stat-label">Total Session Time</span>
+          </div>
+        </div>
+
+        <h2 style="margin-top: 15px;">Stats History</h2>
+        <div class="stats-history" id="statsHistory">
+          <p class="no-stats">No statistics recorded yet</p>
+        </div>
+      </section>
+    </div>
 
     <section class="queue-section" id="queueSection" style="display: none;">
       <h2>Processing Queue</h2>
@@ -65,14 +127,7 @@
       <button class="btn btn-secondary" id="checkServerBtn">Check Server</button>
     </section>
 
-    <section class="info-section">
-      <div class="info-box">
-        <p class="info-text">
-          This extension upscales manga and manhwa images using AI.
-          Make sure the local server is running on port 5000.
-        </p>
-      </div>
-    </section>
+
 
     <footer>
       <p class="version">v1.0.0</p>

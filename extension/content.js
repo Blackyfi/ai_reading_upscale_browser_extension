@@ -16,6 +16,15 @@ let imageCache = new Map();
 let imageQueue = [];
 let isProcessingQueue = false;
 
+// Page statistics
+let pageStats = {
+  totalDetected: 0,
+  totalUpscaled: 0,
+  startTime: Date.now(),
+  upscaleTimes: [],
+  queue: []
+};
+
 // Manga/Manhwa site patterns
 const MANGA_SITES = [
   'mangadex.org',
@@ -60,8 +69,23 @@ function init() {
         // Optionally revert images
       }
       sendResponse({ success: true });
+    } else if (request.type === 'GET_PAGE_STATS') {
+      // Return current page statistics
+      sendResponse({
+        success: true,
+        stats: {
+          ...pageStats,
+          queue: imageQueue.map((item) => ({
+            id: item.imageId,
+            imageUrl: item.img.src,
+            status: item.status || 'queued',
+            progress: item.progress || 0,
+            startTime: item.startTime || Date.now()
+          }))
+        }
+      });
     }
-    return false;
+    return true;
   });
 }
 
@@ -145,34 +169,18 @@ function isUIElement(img) {
   const alt = img.alt ? img.alt.toLowerCase() : '';
   const className = img.className ? img.className.toLowerCase() : '';
 
-  // Check for common UI element patterns in src
-  const uiPatterns = [
-    'icon', 'logo', 'avatar', 'profile', 'button', 'banner',
-    'badge', 'emoji', 'spinner', 'loading', 'placeholder',
-    'thumbnail', 'arrow', 'chevron', 'menu', 'nav', 'header',
-    'footer', 'sidebar', 'ad', 'advertisement'
-  ];
-
-  for (const pattern of uiPatterns) {
-    if (src.includes(pattern) || alt.includes(pattern) || className.includes(pattern)) {
-      return true;
+  // For mangadex.org, handle blob URLs and check class patterns FIRST
+  // This must be checked before other filters that might reject manga images
+  if (window.location.hostname.includes('mangadex.org')) {
+    // Mangadex uses blob URLs for chapter pages with class="img ls limit-width"
+    // These are the manga page images we want to upscale
+    if (className.includes('img') && className.includes('limit-width')) {
+      console.log('[MANGADEX] Processing manga page image:', src, 'alt:', alt);
+      return false;
     }
-  }
 
-  // Check for profile pictures and UI images by class
-  if (className.includes('rounded-full') || className.includes('rounded-circle')) {
+    // Everything else on mangadex is likely UI
     return true;
-  }
-
-  // Check if alt text indicates it's not a manga page
-  if (alt && !alt.includes('chapter') && !alt.includes('page') && !alt.includes('comic')) {
-    // If alt exists but doesn't mention chapter/page/comic, it might be UI
-    const nonMangaAltPatterns = ['user', 'profile', 'close', 'menu', 'search'];
-    for (const pattern of nonMangaAltPatterns) {
-      if (alt.includes(pattern)) {
-        return true;
-      }
-    }
   }
 
   // For asuracomic.net, only process images that are clearly manga panels
@@ -207,6 +215,36 @@ function isUIElement(img) {
     return true;
   }
 
+  // Check for common UI element patterns in src
+  const uiPatterns = [
+    'icon', 'logo', 'avatar', 'profile', 'button', 'banner',
+    'badge', 'emoji', 'spinner', 'loading', 'placeholder',
+    'thumbnail', 'arrow', 'chevron', 'menu', 'nav', 'header',
+    'footer', 'sidebar', 'ad', 'advertisement'
+  ];
+
+  for (const pattern of uiPatterns) {
+    if (src.includes(pattern) || alt.includes(pattern) || className.includes(pattern)) {
+      return true;
+    }
+  }
+
+  // Check for profile pictures and UI images by class
+  if (className.includes('rounded-full') || className.includes('rounded-circle')) {
+    return true;
+  }
+
+  // Check if alt text indicates it's not a manga page
+  if (alt && !alt.includes('chapter') && !alt.includes('page') && !alt.includes('comic')) {
+    // If alt exists but doesn't mention chapter/page/comic, it might be UI
+    const nonMangaAltPatterns = ['user', 'profile', 'close', 'menu', 'search'];
+    for (const pattern of nonMangaAltPatterns) {
+      if (alt.includes(pattern)) {
+        return true;
+      }
+    }
+  }
+
   return false;
 }
 
@@ -230,6 +268,9 @@ async function processImage(img) {
   }
 
   console.log('[DETECT] Found manga image:', img.src, 'alt:', img.alt);
+
+  // Increment detected images count
+  pageStats.totalDetected++;
 
   // Generate unique ID for this image
   const imageId = getImageId(img);
@@ -255,13 +296,44 @@ async function processImage(img) {
 
   // Add to queue
   console.log('[QUEUE] Adding image to queue:', img.src);
-  imageQueue.push({ img, imageId });
+  const queueItem = { 
+    img, 
+    imageId, 
+    status: 'queued',
+    progress: 0,
+    startTime: Date.now()
+  };
+  imageQueue.push(queueItem);
+  
+  // Update page stats queue
+  updatePageStatsQueue();
   
   // Add loading indicator
   addLoadingIndicator(img);
   
   // Start processing queue if not already running
   processQueue();
+}
+
+/**
+ * Update page stats queue
+ */
+function updatePageStatsQueue() {
+  pageStats.queue = imageQueue.map((item) => ({
+    id: item.imageId,
+    imageUrl: item.img.src,
+    status: item.status || 'queued',
+    progress: item.progress || 0,
+    startTime: item.startTime || Date.now()
+  }));
+
+  // Notify popup of stats update
+  chrome.runtime.sendMessage({
+    type: 'PAGE_STATS_UPDATE',
+    data: pageStats
+  }).catch(() => {
+    // Popup not open, ignore
+  });
 }
 
 /**
@@ -281,11 +353,14 @@ async function processQueue() {
   isProcessingQueue = true;
   
   while (imageQueue.length > 0) {
-    const { img, imageId } = imageQueue.shift();
+    const queueItem = imageQueue.shift();
+    const { img, imageId } = queueItem;
     
     console.log(`[PROCESSING] Processing image ${imageId} (${imageQueue.length} remaining in queue)`);
     
     try {
+      const startTime = Date.now();
+
       // Request upscaling from background script
       const response = await chrome.runtime.sendMessage({
         type: 'UPSCALE_IMAGE',
@@ -294,6 +369,9 @@ async function processQueue() {
       });
 
       if (response.success) {
+        const endTime = Date.now();
+        const upscaleTime = (endTime - startTime) / 1000;
+
         // Mark as processed ONLY after successful upscaling
         processedImages.add(imageId);
         
@@ -304,7 +382,11 @@ async function processQueue() {
         // Cache the result
         imageCache.set(imageId, response.dataUrl);
 
-        console.log(`[SUCCESS] Image upscaled: ${imageId}`);
+        // Update statistics
+        pageStats.totalUpscaled++;
+        pageStats.upscaleTimes.push(upscaleTime);
+
+        console.log(`[SUCCESS] Image upscaled: ${imageId} (took ${upscaleTime.toFixed(2)}s)`);
       } else {
         console.error(`[ERROR] Failed to upscale image: ${response.error}`);
         removeLoadingIndicator(img);
@@ -316,12 +398,18 @@ async function processQueue() {
       // Don't mark as processed so it can be retried
     }
     
+    // Update page stats
+    updatePageStatsQueue();
+    
     // Small delay between images to avoid overwhelming the server
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   
   isProcessingQueue = false;
   console.log('[QUEUE] All images processed');
+
+  // Save session statistics
+  saveSessionStatistics();
 }
 
 /**
@@ -483,3 +571,52 @@ function removeLoadingIndicator(img) {
 }
 
 console.log('AI Reading Upscale Extension loaded');
+
+/**
+ * Save session statistics to storage
+ */
+function saveSessionStatistics() {
+  if (pageStats.totalUpscaled === 0) {
+    return; // Don't save empty sessions
+  }
+
+  const sessionDuration = (Date.now() - pageStats.startTime) / 1000;
+
+  chrome.storage.local.get(['sessionStats'], (result) => {
+    const stats = result.sessionStats || {
+      totalUpscaled: 0,
+      totalTime: 0,
+      upscaleTimes: [],
+      sessions: []
+    };
+
+    // Update session totals
+    stats.totalUpscaled = (stats.totalUpscaled || 0) + pageStats.totalUpscaled;
+    stats.totalTime = (stats.totalTime || 0) + sessionDuration;
+    stats.upscaleTimes = (stats.upscaleTimes || []).concat(pageStats.upscaleTimes);
+
+    // Add current session to history
+    const sessionEntry = {
+      timestamp: new Date().toISOString(),
+      imagesUpscaled: pageStats.totalUpscaled,
+      totalDetected: pageStats.totalDetected,
+      totalTime: sessionDuration,
+      upscaleTimes: pageStats.upscaleTimes,
+      pageUrl: window.location.href,
+      avgTime: pageStats.upscaleTimes.length > 0 
+        ? pageStats.upscaleTimes.reduce((a, b) => a + b, 0) / pageStats.upscaleTimes.length
+        : 0
+    };
+
+    stats.sessions = (stats.sessions || []).concat(sessionEntry);
+
+    // Keep only last 100 sessions
+    if (stats.sessions.length > 100) {
+      stats.sessions = stats.sessions.slice(-100);
+    }
+
+    chrome.storage.local.set({ sessionStats: stats });
+
+    console.log('[STATS] Session saved:', sessionEntry);
+  });
+}

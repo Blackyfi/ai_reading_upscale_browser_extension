@@ -1,21 +1,45 @@
 // Popup script for AI Reading Upscale Extension
 
-// DOM elements
-const toggleExtension = document.getElementById('toggleExtension');
-const extensionStatus = document.getElementById('extensionStatus');
-const serverStatus = document.getElementById('serverStatus');
+// DOM elements - Tabs
+const tabBtns = document.querySelectorAll('.tab-btn');
+const tabContents = document.querySelectorAll('.tab-content');
+
+// DOM elements - Current Page Tab
+const pageImagesDetected = document.getElementById('pageImagesDetected');
+const pageImagesUpscaled = document.getElementById('pageImagesUpscaled');
+const pageProgressBar = document.getElementById('pageProgressBar');
+const pageProgressText = document.getElementById('pageProgressText');
+const pageQueueSection = document.getElementById('pageQueueSection');
+const pageQueueList = document.getElementById('pageQueueList');
+
+// DOM elements - Statistics Tab
 const cacheCount = document.getElementById('cacheCount');
 const cacheSize = document.getElementById('cacheSize');
 const queueSize = document.getElementById('queueSize');
+const totalImagesUpscaled = document.getElementById('totalImagesUpscaled');
+const avgUpscaleTime = document.getElementById('avgUpscaleTime');
+const totalSessionTime = document.getElementById('totalSessionTime');
+const statsHistory = document.getElementById('statsHistory');
 const clearCacheBtn = document.getElementById('clearCacheBtn');
 const checkServerBtn = document.getElementById('checkServerBtn');
-const queueSection = document.getElementById('queueSection');
-const queueList = document.getElementById('queueList');
+
+// Toggle Extension
+const toggleExtension = document.getElementById('toggleExtension');
+const extensionStatus = document.getElementById('extensionStatus');
+const serverStatus = document.getElementById('serverStatus');
 
 // Initialize popup
 init();
 
+/**
+ * Initialize popup
+ */
 function init() {
+  // Setup tab switching
+  tabBtns.forEach(btn => {
+    btn.addEventListener('click', handleTabSwitch);
+  });
+
   // Load saved state
   chrome.storage.local.get(['enabled'], (result) => {
     const enabled = result.enabled !== undefined ? result.enabled : true;
@@ -29,13 +53,40 @@ function init() {
   // Load statistics
   loadStatistics();
 
-  // Load processing queue
-  loadQueue();
+  // Load current page statistics
+  loadPageStatistics();
 
   // Set up event listeners
   toggleExtension.addEventListener('change', handleToggle);
   clearCacheBtn.addEventListener('click', handleClearCache);
   checkServerBtn.addEventListener('click', handleCheckServer);
+
+  // Listen for messages from content script
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.type === 'PAGE_STATS_UPDATE') {
+      updatePageStatistics(request.data);
+    }
+  });
+}
+
+/**
+ * Handle tab switching
+ */
+function handleTabSwitch(event) {
+  const tabName = event.target.dataset.tab;
+
+  // Update active tab button
+  tabBtns.forEach(btn => btn.classList.remove('active'));
+  event.target.classList.add('active');
+
+  // Update active tab content
+  tabContents.forEach(content => content.classList.remove('active'));
+  document.getElementById(`${tabName}-tab`).classList.add('active');
+
+  // Reload statistics when switching to statistics tab
+  if (tabName === 'statistics') {
+    loadStatistics();
+  }
 }
 
 /**
@@ -125,6 +176,12 @@ async function loadStatistics() {
       cacheCount.textContent = data.cache_count || 0;
       cacheSize.textContent = `${data.cache_size_mb || 0} MB`;
     }
+
+    // Load session statistics
+    loadSessionStatistics();
+
+    // Load stats history
+    loadStatsHistory();
   } catch (error) {
     console.error('Error loading statistics:', error);
     cacheCount.textContent = '-';
@@ -133,41 +190,133 @@ async function loadStatistics() {
 }
 
 /**
- * Load processing queue
+ * Load session statistics from storage
  */
-async function loadQueue() {
-  try {
-    const response = await chrome.runtime.sendMessage({
-      type: 'GET_QUEUE'
-    });
+function loadSessionStatistics() {
+  chrome.storage.local.get(['sessionStats'], (result) => {
+    const stats = result.sessionStats || {
+      totalUpscaled: 0,
+      totalTime: 0,
+      upscaleTimes: [],
+      sessions: []
+    };
 
-    if (response.success) {
-      renderQueue(response.queue);
+    totalImagesUpscaled.textContent = stats.totalUpscaled || 0;
+
+    if (stats.upscaleTimes && stats.upscaleTimes.length > 0) {
+      const avgTime = stats.upscaleTimes.reduce((a, b) => a + b, 0) / stats.upscaleTimes.length;
+      avgUpscaleTime.textContent = avgTime.toFixed(1) + 's';
+    } else {
+      avgUpscaleTime.textContent = '-';
     }
-  } catch (error) {
-    console.error('Error loading queue:', error);
+
+    if (stats.totalTime && stats.totalTime > 0) {
+      const hours = Math.floor(stats.totalTime / 3600);
+      const minutes = Math.floor((stats.totalTime % 3600) / 60);
+      totalSessionTime.textContent = `${hours}h ${minutes}m`;
+    } else {
+      totalSessionTime.textContent = '-';
+    }
+  });
+}
+
+/**
+ * Load stats history
+ */
+function loadStatsHistory() {
+  chrome.storage.local.get(['sessionStats'], (result) => {
+    const stats = result.sessionStats || { sessions: [] };
+    const sessions = stats.sessions || [];
+
+    if (sessions.length === 0) {
+      statsHistory.innerHTML = '<p class="no-stats">No statistics recorded yet</p>';
+      return;
+    }
+
+    statsHistory.innerHTML = '';
+    
+    // Display last 10 sessions
+    sessions.slice(-10).reverse().forEach((session) => {
+      const sessionDiv = document.createElement('div');
+      sessionDiv.className = 'stats-history-item';
+
+      const date = new Date(session.timestamp).toLocaleString();
+      const avgTime = session.upscaleTimes && session.upscaleTimes.length > 0
+        ? (session.upscaleTimes.reduce((a, b) => a + b, 0) / session.upscaleTimes.length).toFixed(1)
+        : 0;
+
+      sessionDiv.innerHTML = `
+        <div class="stats-history-date">${date}</div>
+        <div class="stats-history-data">
+          <div>Images upscaled: ${session.imagesUpscaled || 0}</div>
+          <div>Average time: ${avgTime}s</div>
+          <div>Total time: ${session.totalTime ? Math.round(session.totalTime) + 's' : '-'}</div>
+          <div>From: ${session.pageUrl || 'Unknown'}</div>
+        </div>
+      `;
+
+      statsHistory.appendChild(sessionDiv);
+    });
+  });
+}
+
+/**
+ * Load page statistics
+ */
+function loadPageStatistics() {
+  // Get current tab
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (tabs.length > 0) {
+      const tabId = tabs[0].id;
+      
+      // Request page stats from content script
+      chrome.tabs.sendMessage(tabId, {
+        type: 'GET_PAGE_STATS'
+      }, (response) => {
+        if (response && response.success) {
+          updatePageStatistics(response.stats);
+        }
+      }).catch(() => {
+        // Content script might not be loaded
+        pageImagesDetected.textContent = '0';
+        pageImagesUpscaled.textContent = '0';
+      });
+    }
+  });
+}
+
+/**
+ * Update page statistics
+ */
+function updatePageStatistics(stats) {
+  pageImagesDetected.textContent = stats.totalDetected || 0;
+  pageImagesUpscaled.textContent = stats.totalUpscaled || 0;
+
+  const total = stats.totalDetected || 1;
+  const upscaled = stats.totalUpscaled || 0;
+  const percentage = Math.round((upscaled / total) * 100);
+
+  pageProgressBar.style.width = percentage + '%';
+  pageProgressText.textContent = percentage + '%';
+
+  // Show/hide queue section
+  if (stats.queue && stats.queue.length > 0) {
+    pageQueueSection.style.display = 'block';
+    renderPageQueue(stats.queue);
+  } else {
+    pageQueueSection.style.display = 'none';
   }
 }
 
 /**
- * Render processing queue
+ * Render page queue
  */
-function renderQueue(queue) {
-  // Show/hide queue section based on queue length
-  if (queue.length === 0) {
-    queueSection.style.display = 'none';
-    return;
-  }
+function renderPageQueue(queue) {
+  pageQueueList.innerHTML = '';
 
-  queueSection.style.display = 'block';
-
-  // Clear existing items
-  queueList.innerHTML = '';
-
-  // Render each queue item
   queue.forEach((item) => {
     const queueItem = createQueueItem(item);
-    queueList.appendChild(queueItem);
+    pageQueueList.appendChild(queueItem);
   });
 }
 
@@ -241,6 +390,45 @@ function truncateUrl(url) {
 }
 
 /**
+ * Load processing queue (from background script)
+ */
+async function loadQueue() {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'GET_QUEUE'
+    });
+
+    if (response.success) {
+      renderQueue(response.queue);
+    }
+  } catch (error) {
+    console.error('Error loading queue:', error);
+  }
+}
+
+/**
+ * Render processing queue
+ */
+function renderQueue(queue) {
+  // Show/hide queue section based on queue length
+  if (queue.length === 0) {
+    pageQueueSection.style.display = 'none';
+    return;
+  }
+
+  pageQueueSection.style.display = 'block';
+
+  // Clear existing items
+  pageQueueList.innerHTML = '';
+
+  // Render each queue item
+  queue.forEach((item) => {
+    const queueItem = createQueueItem(item);
+    pageQueueList.appendChild(queueItem);
+  });
+}
+
+/**
  * Handle clear cache button
  */
 async function handleClearCache() {
@@ -308,8 +496,14 @@ function showMessage(message, isError = false) {
   }, 3000);
 }
 
-// Auto-refresh statistics and queue every 1 second for real-time updates
+// Auto-refresh statistics and page stats every 1 second for real-time updates
 setInterval(() => {
-  loadStatistics();
-  loadQueue();
+  // Only refresh if statistics tab is active, but always refresh page stats
+  const activeTab = document.querySelector('.tab-content.active').id;
+  
+  if (activeTab === 'statistics-tab') {
+    loadStatistics();
+  }
+  
+  loadPageStatistics();
 }, 1000);
