@@ -4,8 +4,8 @@ const SERVER_URL = 'http://127.0.0.1:5000';
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
 
-// Store for processing queue
-let processingQueue = new Map();
+// Store for processing queue with progress tracking
+let processingQueue = new Map(); // Map<imageId, {status, progress, startTime, imageUrl}>
 let serverAvailable = false;
 
 // Check server health on startup
@@ -28,6 +28,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       success: true,
       serverAvailable,
       queueSize: processingQueue.size
+    });
+    return false;
+  }
+
+  if (request.type === 'GET_QUEUE') {
+    // Convert Map to array for sending
+    const queueArray = Array.from(processingQueue.entries()).map(([id, data]) => ({
+      id,
+      ...data
+    }));
+    sendResponse({
+      success: true,
+      queue: queueArray
     });
     return false;
   }
@@ -94,19 +107,25 @@ async function handleUpscaleRequest(request, tabId) {
 
   try {
     // Add to processing queue
-    processingQueue.set(imageId, { status: 'processing', startTime: Date.now() });
+    updateProgress(imageId, 'queued', 0, imageUrl);
 
     // Fetch the original image
+    updateProgress(imageId, 'fetching', 20, imageUrl);
     const imageBlob = await fetchImageWithRetry(imageUrl);
 
     // Send to server for upscaling
-    const upscaledBlob = await upscaleImage(imageBlob);
+    updateProgress(imageId, 'uploading', 40, imageUrl);
+    const upscaledBlob = await upscaleImage(imageBlob, imageId);
 
     // Convert to data URL
+    updateProgress(imageId, 'converting', 90, imageUrl);
     const dataUrl = await blobToDataUrl(upscaledBlob);
 
-    // Remove from queue
-    processingQueue.delete(imageId);
+    // Complete
+    updateProgress(imageId, 'completed', 100, imageUrl);
+
+    // Remove from queue after a short delay to show completion
+    setTimeout(() => processingQueue.delete(imageId), 1000);
 
     return {
       success: true,
@@ -114,9 +133,33 @@ async function handleUpscaleRequest(request, tabId) {
       imageId
     };
   } catch (error) {
-    processingQueue.delete(imageId);
+    updateProgress(imageId, 'error', 0, imageUrl);
+    setTimeout(() => processingQueue.delete(imageId), 2000);
     throw error;
   }
+}
+
+/**
+ * Update progress for an image and notify listeners
+ */
+function updateProgress(imageId, status, progress, imageUrl) {
+  processingQueue.set(imageId, {
+    status,
+    progress,
+    startTime: processingQueue.get(imageId)?.startTime || Date.now(),
+    imageUrl: imageUrl || processingQueue.get(imageId)?.imageUrl
+  });
+
+  // Broadcast update to any listening popups
+  broadcastQueueUpdate();
+}
+
+/**
+ * Broadcast queue updates to popup
+ */
+function broadcastQueueUpdate() {
+  // Note: Chrome extensions don't have a direct way to push to popup
+  // Popup will poll for updates instead
 }
 
 /**
@@ -141,11 +184,19 @@ async function fetchImageWithRetry(url, retries = MAX_RETRIES) {
 /**
  * Send image to server for upscaling
  */
-async function upscaleImage(imageBlob, retries = MAX_RETRIES) {
+async function upscaleImage(imageBlob, imageId, retries = MAX_RETRIES) {
   for (let i = 0; i < retries; i++) {
     try {
       const formData = new FormData();
       formData.append('image', imageBlob, 'image.png');
+
+      // Update to processing status
+      if (imageId) {
+        const queueItem = processingQueue.get(imageId);
+        if (queueItem) {
+          updateProgress(imageId, 'processing', 60, queueItem.imageUrl);
+        }
+      }
 
       const response = await fetch(`${SERVER_URL}/upscale`, {
         method: 'POST',

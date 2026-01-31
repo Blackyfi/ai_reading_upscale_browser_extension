@@ -213,15 +213,36 @@ function replaceImage(img, dataUrl) {
   // Replace src with upscaled version
   img.src = dataUrl;
 
-  // Maintain original dimensions if needed
-  // img.style.width = img.width + 'px';
-  // img.style.height = img.height + 'px';
+  // Show the image now that it's upscaled
+  img.style.opacity = '1';
+  img.style.visibility = 'visible';
+
+  // Clean up stored states
+  delete img.dataset.originalOpacity;
+  delete img.dataset.originalVisibility;
 }
 
 /**
  * Add loading indicator to image
  */
 function addLoadingIndicator(img) {
+  // Store original display state
+  img.dataset.originalOpacity = img.style.opacity || '1';
+  img.dataset.originalVisibility = img.style.visibility || 'visible';
+
+  // Get image dimensions before hiding
+  const computedStyle = window.getComputedStyle(img);
+  const width = img.offsetWidth || img.naturalWidth;
+  const height = img.offsetHeight || img.naturalHeight;
+
+  // Preserve dimensions and hide the image
+  if (width && height) {
+    img.style.width = width + 'px';
+    img.style.height = height + 'px';
+  }
+  img.style.opacity = '0';
+  img.style.visibility = 'hidden';
+
   // Add a semi-transparent overlay with loading animation
   const overlay = document.createElement('div');
   overlay.className = 'ai-upscale-loading';
@@ -283,6 +304,14 @@ function removeLoadingIndicator(img) {
     img.loadingOverlay.parentNode.removeChild(img.loadingOverlay);
     img.loadingOverlay = null;
     delete img.dataset.loadingOverlay;
+  }
+
+  // If image is still hidden (upscaling failed), restore visibility
+  if (img.style.opacity === '0' || img.style.visibility === 'hidden') {
+    img.style.opacity = img.dataset.originalOpacity || '1';
+    img.style.visibility = img.dataset.originalVisibility || 'visible';
+    delete img.dataset.originalOpacity;
+    delete img.dataset.originalVisibility;
   }
 }
 

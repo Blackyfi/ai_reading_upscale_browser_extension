@@ -9,6 +9,8 @@ const cacheSize = document.getElementById('cacheSize');
 const queueSize = document.getElementById('queueSize');
 const clearCacheBtn = document.getElementById('clearCacheBtn');
 const checkServerBtn = document.getElementById('checkServerBtn');
+const queueSection = document.getElementById('queueSection');
+const queueList = document.getElementById('queueList');
 
 // Initialize popup
 init();
@@ -26,6 +28,9 @@ function init() {
 
   // Load statistics
   loadStatistics();
+
+  // Load processing queue
+  loadQueue();
 
   // Set up event listeners
   toggleExtension.addEventListener('change', handleToggle);
@@ -128,6 +133,114 @@ async function loadStatistics() {
 }
 
 /**
+ * Load processing queue
+ */
+async function loadQueue() {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'GET_QUEUE'
+    });
+
+    if (response.success) {
+      renderQueue(response.queue);
+    }
+  } catch (error) {
+    console.error('Error loading queue:', error);
+  }
+}
+
+/**
+ * Render processing queue
+ */
+function renderQueue(queue) {
+  // Show/hide queue section based on queue length
+  if (queue.length === 0) {
+    queueSection.style.display = 'none';
+    return;
+  }
+
+  queueSection.style.display = 'block';
+
+  // Clear existing items
+  queueList.innerHTML = '';
+
+  // Render each queue item
+  queue.forEach((item) => {
+    const queueItem = createQueueItem(item);
+    queueList.appendChild(queueItem);
+  });
+}
+
+/**
+ * Create queue item element
+ */
+function createQueueItem(item) {
+  const div = document.createElement('div');
+  div.className = 'queue-item';
+  div.dataset.imageId = item.id;
+
+  // Get status text and icon
+  const statusInfo = getStatusInfo(item.status);
+
+  // Calculate elapsed time
+  const elapsed = Math.round((Date.now() - item.startTime) / 1000);
+
+  div.innerHTML = `
+    <div class="queue-item-header">
+      <span class="queue-status ${item.status}">
+        <span class="status-icon">${statusInfo.icon}</span>
+        <span class="status-text">${statusInfo.text}</span>
+      </span>
+      <span class="queue-time">${elapsed}s</span>
+    </div>
+    <div class="progress-bar-container">
+      <div class="progress-bar" style="width: ${item.progress}%">
+        <span class="progress-text">${item.progress}%</span>
+      </div>
+    </div>
+    <div class="queue-item-url">${truncateUrl(item.imageUrl)}</div>
+  `;
+
+  return div;
+}
+
+/**
+ * Get status information
+ */
+function getStatusInfo(status) {
+  const statusMap = {
+    'queued': { icon: '⏳', text: 'Queued' },
+    'fetching': { icon: '📥', text: 'Fetching' },
+    'uploading': { icon: '📤', text: 'Uploading' },
+    'processing': { icon: '⚙️', text: 'Processing' },
+    'converting': { icon: '🔄', text: 'Converting' },
+    'completed': { icon: '✅', text: 'Completed' },
+    'error': { icon: '❌', text: 'Error' }
+  };
+
+  return statusMap[status] || { icon: '❓', text: 'Unknown' };
+}
+
+/**
+ * Truncate URL for display
+ */
+function truncateUrl(url) {
+  if (!url) return '';
+  const maxLength = 40;
+  if (url.length <= maxLength) return url;
+
+  // Try to extract filename
+  const parts = url.split('/');
+  const filename = parts[parts.length - 1];
+
+  if (filename.length <= maxLength) {
+    return '.../' + filename;
+  }
+
+  return url.substring(0, maxLength - 3) + '...';
+}
+
+/**
  * Handle clear cache button
  */
 async function handleClearCache() {
@@ -195,5 +308,8 @@ function showMessage(message, isError = false) {
   }, 3000);
 }
 
-// Auto-refresh statistics every 5 seconds
-setInterval(loadStatistics, 5000);
+// Auto-refresh statistics and queue every 1 second for real-time updates
+setInterval(() => {
+  loadStatistics();
+  loadQueue();
+}, 1000);
