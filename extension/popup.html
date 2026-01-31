@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Reading Upscale</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>AI Reading Upscale</h1>
+      <p class="subtitle">Manga & Manhwa Image Enhancement</p>
+    </header>
+
+    <section class="status-section">
+      <div class="status-item">
+        <span class="status-label">Extension Status:</span>
+        <div class="toggle-container">
+          <label class="switch">
+            <input type="checkbox" id="toggleExtension" checked>
+            <span class="slider"></span>
+          </label>
+          <span class="status-text" id="extensionStatus">Enabled</span>
+        </div>
+      </div>
+
+      <div class="status-item">
+        <span class="status-label">Server Status:</span>
+        <span class="status-indicator" id="serverStatus">
+          <span class="indicator-dot"></span>
+          <span class="indicator-text">Checking...</span>
+        </span>
+      </div>
+    </section>
+
+    <section class="stats-section">
+      <h2>Statistics</h2>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <span class="stat-value" id="cacheCount">-</span>
+          <span class="stat-label">Cached Images</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="cacheSize">-</span>
+          <span class="stat-label">Cache Size</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="queueSize">-</span>
+          <span class="stat-label">Processing Queue</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="actions-section">
+      <h2>Actions</h2>
+      <button class="btn btn-primary" id="clearCacheBtn">Clear Cache</button>
+      <button class="btn btn-secondary" id="checkServerBtn">Check Server</button>
+    </section>
+
+    <section class="info-section">
+      <div class="info-box">
+        <p class="info-text">
+          This extension upscales manga and manhwa images using AI.
+          Make sure the local server is running on port 5000.
+        </p>
+      </div>
+    </section>
+
+    <footer>
+      <p class="version">v1.0.0</p>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
