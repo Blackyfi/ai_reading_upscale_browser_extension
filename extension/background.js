@@ -1,10 +1,30 @@
 const SERVER_URL = 'http://127.0.0.1:5000';
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
+const DEBUG = true;
 
 // Map<imageId, {status, progress, startTime, imageUrl}>
 let processingQueue = new Map();
 let serverAvailable = false;
+
+function debugLog(category, message, data = null) {
+  if (!DEBUG) return;
+  const prefix = `[AI Upscale BG][${category}]`;
+  if (data) {
+    console.log(prefix, message, data);
+  } else {
+    console.log(prefix, message);
+  }
+}
+
+function debugError(category, message, data = null) {
+  const prefix = `[AI Upscale BG][${category}]`;
+  if (data) {
+    console.error(prefix, message, data);
+  } else {
+    console.error(prefix, message);
+  }
+}
 
 checkServerHealth();
 
@@ -42,9 +62,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.type === 'FETCH_IMAGE') {
     // Fetch image from background script (bypasses CORS)
+    debugLog('FETCH_IMAGE', `Received request for: ${request.imageUrl}`);
     fetchImageAsBase64(request.imageUrl)
-      .then(base64 => sendResponse({ success: true, base64 }))
-      .catch(error => sendResponse({ success: false, error: error.message }));
+      .then(base64 => {
+        debugLog('FETCH_IMAGE', `Success! Got base64 (${base64?.length} chars)`);
+        sendResponse({ success: true, base64 });
+      })
+      .catch(error => {
+        debugError('FETCH_IMAGE', `Failed: ${error.message}`, error);
+        sendResponse({ success: false, error: error.message });
+      });
     return true;
   }
 
@@ -107,15 +134,26 @@ async function checkServerHealth() {
 async function handleUpscaleRequest(request, tabId) {
   const { imageUrl, imageId, imageData } = request;
 
+  debugLog('Upscale', `handleUpscaleRequest called`, {
+    imageUrl: imageUrl?.substring(0, 80),
+    imageId: imageId?.substring(0, 20),
+    hasImageData: !!imageData,
+    imageDataLength: imageData?.length
+  });
+
   if (processingQueue.has(imageId)) {
+    debugLog('Upscale', `SKIP: Already processing this image`);
     return { success: false, error: 'Already processing this image' };
   }
 
   if (!serverAvailable) {
+    debugLog('Upscale', `Server not available, checking health...`);
     const isAvailable = await checkServerHealth();
     if (!isAvailable) {
+      debugError('Upscale', `Server not available after health check`);
       return { success: false, error: 'Server not available' };
     }
+    debugLog('Upscale', `Server is now available`);
   }
 
   try {
@@ -125,28 +163,38 @@ async function handleUpscaleRequest(request, tabId) {
 
     // Use base64 data if provided (fetched by content script), otherwise fetch URL
     if (imageData) {
+      debugLog('Upscale', `Converting base64 data to blob...`);
       updateProgress(imageId, 'converting', 20, imageUrl);
       imageBlob = await dataUrlToBlob(imageData);
+      debugLog('Upscale', `Blob created: size=${imageBlob.size}, type=${imageBlob.type}`);
     } else {
+      debugLog('Upscale', `Fetching image from URL...`);
       updateProgress(imageId, 'fetching', 20, imageUrl);
       imageBlob = await fetchImageWithRetry(imageUrl);
     }
 
+    debugLog('Upscale', `Sending to upscale server...`);
     updateProgress(imageId, 'uploading', 40, imageUrl);
     const upscaledBlob = await upscaleImage(imageBlob, imageId);
+    debugLog('Upscale', `Upscaled blob received: size=${upscaledBlob.size}`);
+
     updateProgress(imageId, 'converting', 90, imageUrl);
     const dataUrl = await blobToDataUrl(upscaledBlob);
+    debugLog('Upscale', `Conversion complete (${dataUrl?.length} chars)`);
+
     updateProgress(imageId, 'completed', 100, imageUrl);
 
     // Remove from queue after delay to show completion
     setTimeout(() => processingQueue.delete(imageId), 1000);
 
+    debugLog('Upscale', `SUCCESS: Image upscaled`);
     return {
       success: true,
       dataUrl,
       imageId
     };
   } catch (error) {
+    debugError('Upscale', `FAILED: ${error.message}`, error);
     updateProgress(imageId, 'error', 0, imageUrl);
     setTimeout(() => processingQueue.delete(imageId), 2000);
     throw error;
@@ -169,16 +217,28 @@ function updateProgress(imageId, status, progress, imageUrl) {
  * Fetch image with retry logic
  */
 async function fetchImageWithRetry(url, retries = MAX_RETRIES) {
+  debugLog('FetchRetry', `Starting fetch for: ${url} (max ${retries} retries)`);
+
   for (let i = 0; i < retries; i++) {
     try {
+      debugLog('FetchRetry', `Attempt ${i + 1}/${retries}...`);
       const response = await fetch(url);
+      debugLog('FetchRetry', `Response: status=${response.status}, ok=${response.ok}, type=${response.type}`);
+
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      return await response.blob();
+
+      const blob = await response.blob();
+      debugLog('FetchRetry', `Success! Got blob: size=${blob.size}, type=${blob.type}`);
+      return blob;
     } catch (error) {
-      console.error(`Fetch attempt ${i + 1} failed:`, error);
-      if (i === retries - 1) throw error;
+      debugError('FetchRetry', `Attempt ${i + 1} failed: ${error.message}`, error);
+      if (i === retries - 1) {
+        debugError('FetchRetry', `All ${retries} attempts failed, giving up`);
+        throw error;
+      }
+      debugLog('FetchRetry', `Waiting ${RETRY_DELAY}ms before retry...`);
       await delay(RETRY_DELAY);
     }
   }
@@ -188,8 +248,11 @@ async function fetchImageWithRetry(url, retries = MAX_RETRIES) {
  * Send image to server for upscaling
  */
 async function upscaleImage(imageBlob, imageId, retries = MAX_RETRIES) {
+  debugLog('UpscaleServer', `Sending to server: blob size=${imageBlob.size}, type=${imageBlob.type}`);
+
   for (let i = 0; i < retries; i++) {
     try {
+      debugLog('UpscaleServer', `Attempt ${i + 1}/${retries}...`);
       const formData = new FormData();
       formData.append('image', imageBlob, 'image.png');
 
@@ -200,23 +263,30 @@ async function upscaleImage(imageBlob, imageId, retries = MAX_RETRIES) {
         }
       }
 
+      debugLog('UpscaleServer', `POSTing to ${SERVER_URL}/upscale`);
       const response = await fetch(`${SERVER_URL}/upscale`, {
         method: 'POST',
         body: formData,
         mode: 'cors'
       });
 
+      debugLog('UpscaleServer', `Response: status=${response.status}, ok=${response.ok}`);
+
       if (!response.ok) {
         throw new Error(`Server error! status: ${response.status}`);
       }
 
-      return await response.blob();
+      const resultBlob = await response.blob();
+      debugLog('UpscaleServer', `Success! Result blob: size=${resultBlob.size}, type=${resultBlob.type}`);
+      return resultBlob;
     } catch (error) {
-      console.error(`Upscale attempt ${i + 1} failed:`, error);
+      debugError('UpscaleServer', `Attempt ${i + 1} failed: ${error.message}`, error);
       if (i === retries - 1) {
         serverAvailable = false;
+        debugError('UpscaleServer', `All attempts failed, marking server as unavailable`);
         throw error;
       }
+      debugLog('UpscaleServer', `Waiting ${RETRY_DELAY}ms before retry...`);
       await delay(RETRY_DELAY);
     }
   }
@@ -246,8 +316,17 @@ async function dataUrlToBlob(dataUrl) {
  * Fetch image and convert to base64 (used by content script to bypass CORS)
  */
 async function fetchImageAsBase64(imageUrl) {
-  const blob = await fetchImageWithRetry(imageUrl);
-  return blobToDataUrl(blob);
+  debugLog('FetchBase64', `fetchImageAsBase64 called for: ${imageUrl}`);
+  try {
+    const blob = await fetchImageWithRetry(imageUrl);
+    debugLog('FetchBase64', `Got blob, converting to data URL...`);
+    const dataUrl = await blobToDataUrl(blob);
+    debugLog('FetchBase64', `Conversion complete (${dataUrl?.length} chars)`);
+    return dataUrl;
+  } catch (error) {
+    debugError('FetchBase64', `Failed: ${error.message}`);
+    throw error;
+  }
 }
 
 /**

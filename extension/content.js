@@ -5,10 +5,44 @@
 const CONFIG = {
   minImageWidth: 200,
   minImageHeight: 200,
-  maxImageWidth: 2000,
+  maxImageWidth: 3000,
   maxImageHeight: 20000,
-  enabledByDefault: false
+  enabledByDefault: false,
+  debug: true // Enable detailed logging
 };
+
+// =============================================================================
+// DEBUG LOGGING
+// =============================================================================
+
+function debugLog(category, message, data = null) {
+  if (!CONFIG.debug) return;
+  const prefix = `[AI Upscale][${category}]`;
+  if (data) {
+    console.log(prefix, message, data);
+  } else {
+    console.log(prefix, message);
+  }
+}
+
+function debugWarn(category, message, data = null) {
+  if (!CONFIG.debug) return;
+  const prefix = `[AI Upscale][${category}]`;
+  if (data) {
+    console.warn(prefix, message, data);
+  } else {
+    console.warn(prefix, message);
+  }
+}
+
+function debugError(category, message, data = null) {
+  const prefix = `[AI Upscale][${category}]`;
+  if (data) {
+    console.error(prefix, message, data);
+  } else {
+    console.error(prefix, message);
+  }
+}
 
 // =============================================================================
 // STATE MANAGEMENT
@@ -137,15 +171,20 @@ function webtoonGetImageUrl(img) {
 function asuraIsReadingPage() {
   // AsuraScans chapter pages typically have chapter in URL or specific page structure
   // Check if we're on a page with manga images
-  return document.querySelector('img[src*="/storage/media/"]') !== null;
+  const hasMediaImages = document.querySelector('img[src*="/storage/media/"]') !== null;
+  debugLog('Asura', `isReadingPage check: hasMediaImages=${hasMediaImages}, URL=${window.location.href}`);
+  return hasMediaImages;
 }
 
 function asuraIsMangaImage(img) {
   const src = img.src ? img.src.toLowerCase() : '';
   const alt = img.alt ? img.alt.toLowerCase() : '';
 
+  debugLog('Asura', `Checking image: src="${src.substring(0, 100)}..."`, { alt, className: img.className });
+
   // Only process images from the storage/media path (actual chapter images)
   if (!src.includes('/storage/media/')) {
+    debugLog('Asura', `SKIP: Image does not contain /storage/media/ in src`);
     return false;
   }
 
@@ -153,12 +192,22 @@ function asuraIsMangaImage(img) {
   const isChapterPage = /\/storage\/media\/\d+\/(\d{2}\.(jpg|png|webp)|conversions\/\d{2}-optimized\.(jpg|png|webp))/.test(src);
   const hasChapterAlt = alt.includes('chapter page');
 
-  return isChapterPage || hasChapterAlt;
+  debugLog('Asura', `Pattern check: isChapterPage=${isChapterPage}, hasChapterAlt=${hasChapterAlt}`);
+
+  if (!isChapterPage && !hasChapterAlt) {
+    debugLog('Asura', `SKIP: Does not match chapter page pattern or alt text`);
+    return false;
+  }
+
+  debugLog('Asura', `ACCEPTED: Image is a valid manga image`);
+  return true;
 }
 
 function asuraGetImageUrl(img) {
   // AsuraScans uses direct src URLs
-  return img.src || null;
+  const url = img.src || null;
+  debugLog('Asura', `getImageUrl: ${url}`);
+  return url;
 }
 
 // =============================================================================
@@ -293,6 +342,8 @@ function meetsImageCriteria(img) {
   let width = img.naturalWidth;
   let height = img.naturalHeight;
 
+  debugLog('Size', `Initial dimensions: ${width}x${height}, complete=${img.complete}`, { src: img.src?.substring(0, 80) });
+
   // For lazy-loaded images, check explicit dimensions
   const actualUrl = currentSiteHandler.getImageUrl(img);
   const isPlaceholderLoaded = img.src && (img.src.includes('bg_transparency') || img.src.includes('placeholder'));
@@ -303,14 +354,17 @@ function meetsImageCriteria(img) {
     if (attrWidth > 0 && attrHeight > 0) {
       width = attrWidth;
       height = attrHeight;
+      debugLog('Size', `Using attribute dimensions: ${width}x${height}`);
     }
   }
 
   // Wait for lazy-loaded images to have dimensions
   if (width === 0 || height === 0 || (!img.complete && !isPlaceholderLoaded)) {
+    debugLog('Size', `DEFER: Image not loaded yet (${width}x${height}, complete=${img.complete}), adding load listener`);
     if (!img.dataset.loadListenerAdded) {
       img.dataset.loadListenerAdded = 'true';
       img.addEventListener('load', () => {
+        debugLog('Size', `Image load event fired, reprocessing`);
         delete img.dataset.loadListenerAdded;
         processImage(img);
       }, { once: true });
@@ -319,13 +373,16 @@ function meetsImageCriteria(img) {
   }
 
   if (width < CONFIG.minImageWidth || height < CONFIG.minImageHeight) {
+    debugLog('Size', `SKIP: Too small (${width}x${height}), min required: ${CONFIG.minImageWidth}x${CONFIG.minImageHeight}`);
     return false;
   }
 
   if (width > CONFIG.maxImageWidth || height > CONFIG.maxImageHeight) {
+    debugLog('Size', `SKIP: Too large (${width}x${height}), max allowed: ${CONFIG.maxImageWidth}x${CONFIG.maxImageHeight}`);
     return false;
   }
 
+  debugLog('Size', `ACCEPTED: Dimensions OK (${width}x${height})`);
   return true;
 }
 
@@ -337,12 +394,24 @@ function meetsImageCriteria(img) {
  * Extract image data using canvas (works for images with CORS support)
  */
 async function extractImageAsBase64(img, imageUrl) {
+  debugLog('Fetch', `Starting extraction for: ${imageUrl}`);
+  debugLog('Fetch', `Site needsBackgroundFetch: ${currentSiteHandler.needsBackgroundFetch}`);
+
   return new Promise((resolve, reject) => {
     try {
+      // If site needs background fetch, skip canvas attempt entirely
+      if (currentSiteHandler.needsBackgroundFetch) {
+        debugLog('Fetch', `Skipping canvas (site requires background fetch), going directly to fetchImageWithFallback`);
+        fetchImageWithFallback(imageUrl).then(resolve).catch(reject);
+        return;
+      }
+
+      debugLog('Fetch', `Attempting canvas extraction with crossOrigin='anonymous'`);
       const tempImg = new Image();
       tempImg.crossOrigin = 'anonymous';
 
       tempImg.onload = () => {
+        debugLog('Fetch', `Canvas: Image loaded (${tempImg.naturalWidth}x${tempImg.naturalHeight})`);
         try {
           const canvas = document.createElement('canvas');
           canvas.width = tempImg.naturalWidth;
@@ -354,25 +423,30 @@ async function extractImageAsBase64(img, imageUrl) {
           let dataUrl;
           try {
             dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+            debugLog('Fetch', `Canvas: Successfully extracted as JPEG (${dataUrl.length} chars)`);
           } catch (e) {
+            debugLog('Fetch', `Canvas: JPEG failed, trying PNG`);
             dataUrl = canvas.toDataURL('image/png');
+            debugLog('Fetch', `Canvas: Successfully extracted as PNG (${dataUrl.length} chars)`);
           }
 
           resolve(dataUrl);
         } catch (canvasError) {
           // Canvas tainted - try fetch methods
-          console.warn('[AI Upscale] Canvas tainted, trying fetch fallback');
+          debugWarn('Fetch', `Canvas TAINTED (CORS issue), falling back to fetch methods`, canvasError.message);
           fetchImageWithFallback(imageUrl).then(resolve).catch(reject);
         }
       };
 
-      tempImg.onerror = () => {
+      tempImg.onerror = (err) => {
         // Image failed to load with crossOrigin, try fetch methods
+        debugWarn('Fetch', `Canvas: Image failed to load with crossOrigin, trying fetch fallback`, err);
         fetchImageWithFallback(imageUrl).then(resolve).catch(reject);
       };
 
       tempImg.src = imageUrl;
     } catch (error) {
+      debugError('Fetch', `Canvas extraction threw exception`, error);
       reject(error);
     }
   });
@@ -384,18 +458,22 @@ async function extractImageAsBase64(img, imageUrl) {
  * 2. Fall back to background script fetch (works for Asura, etc.)
  */
 async function fetchImageWithFallback(imageUrl) {
+  debugLog('Fetch', `fetchImageWithFallback called for: ${imageUrl}`);
+
   // If site is known to need background fetch, skip direct attempt
   if (currentSiteHandler.needsBackgroundFetch) {
-    console.log('[AI Upscale] Using background fetch (site requires it)');
+    debugLog('Fetch', `Site requires background fetch, skipping direct fetch attempt`);
     return fetchImageViaBackground(imageUrl);
   }
 
   // Try direct fetch first
+  debugLog('Fetch', `Attempting direct CORS fetch first`);
   try {
     const base64 = await fetchImageDirect(imageUrl);
+    debugLog('Fetch', `Direct fetch succeeded (${base64.length} chars)`);
     return base64;
   } catch (directError) {
-    console.warn('[AI Upscale] Direct fetch failed, trying background:', directError.message);
+    debugWarn('Fetch', `Direct fetch FAILED: ${directError.message}, trying background fetch`);
     // Fall back to background fetch
     return fetchImageViaBackground(imageUrl);
   }
@@ -405,20 +483,32 @@ async function fetchImageWithFallback(imageUrl) {
  * Direct fetch (works for CDNs that support CORS)
  */
 async function fetchImageDirect(imageUrl) {
+  debugLog('Fetch', `fetchImageDirect: Starting fetch with mode='cors'`);
+
   const response = await fetch(imageUrl, {
     mode: 'cors',
     credentials: 'omit'
   });
+
+  debugLog('Fetch', `fetchImageDirect: Response status=${response.status}, ok=${response.ok}`);
 
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);
   }
 
   const blob = await response.blob();
+  debugLog('Fetch', `fetchImageDirect: Got blob, size=${blob.size}, type=${blob.type}`);
+
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result);
-    reader.onerror = reject;
+    reader.onloadend = () => {
+      debugLog('Fetch', `fetchImageDirect: FileReader complete (${reader.result?.length} chars)`);
+      resolve(reader.result);
+    };
+    reader.onerror = (err) => {
+      debugError('Fetch', `fetchImageDirect: FileReader error`, err);
+      reject(err);
+    };
     reader.readAsDataURL(blob);
   });
 }
@@ -427,16 +517,36 @@ async function fetchImageDirect(imageUrl) {
  * Fetch image via background script (bypasses CORS restrictions)
  */
 async function fetchImageViaBackground(imageUrl) {
-  const response = await chrome.runtime.sendMessage({
-    type: 'FETCH_IMAGE',
-    imageUrl: imageUrl
-  });
+  debugLog('Fetch', `fetchImageViaBackground: Sending FETCH_IMAGE message to background script`);
+  debugLog('Fetch', `fetchImageViaBackground: URL = ${imageUrl}`);
 
-  if (!response.success) {
-    throw new Error(response.error || 'Failed to fetch image via background');
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'FETCH_IMAGE',
+      imageUrl: imageUrl
+    });
+
+    debugLog('Fetch', `fetchImageViaBackground: Got response from background`, {
+      success: response?.success,
+      hasBase64: !!response?.base64,
+      base64Length: response?.base64?.length,
+      error: response?.error
+    });
+
+    if (!response) {
+      throw new Error('No response from background script (extension may need reload)');
+    }
+
+    if (!response.success) {
+      throw new Error(response.error || 'Failed to fetch image via background');
+    }
+
+    debugLog('Fetch', `fetchImageViaBackground: SUCCESS (${response.base64?.length} chars)`);
+    return response.base64;
+  } catch (err) {
+    debugError('Fetch', `fetchImageViaBackground: FAILED`, err.message);
+    throw err;
   }
-
-  return response.base64;
 }
 
 // =============================================================================
@@ -447,16 +557,28 @@ async function fetchImageViaBackground(imageUrl) {
  * Process individual image
  */
 async function processImage(img) {
-  if (!isEnabled || !currentSiteHandler) return;
+  const imgSrc = img.src?.substring(0, 80) || 'no-src';
+
+  if (!isEnabled) {
+    debugLog('Process', `SKIP: Extension is disabled`, { src: imgSrc });
+    return;
+  }
+
+  if (!currentSiteHandler) {
+    debugLog('Process', `SKIP: No site handler available`, { src: imgSrc });
+    return;
+  }
 
   // Check if on reading page
   if (!currentSiteHandler.isReadingPage()) {
+    debugLog('Process', `SKIP: Not on a reading page`, { src: imgSrc });
     return;
   }
 
   // Get actual image URL using site-specific handler
   const actualUrl = currentSiteHandler.getImageUrl(img);
   if (!actualUrl) {
+    debugLog('Process', `DEFER: No URL available yet, adding observer`, { src: imgSrc });
     // Image might still be lazy loading, add observer
     if (!img.dataset.urlObserverAdded) {
       img.dataset.urlObserverAdded = 'true';
@@ -464,6 +586,7 @@ async function processImage(img) {
         mutations.forEach((mutation) => {
           if (mutation.type === 'attributes' &&
               (mutation.attributeName === 'src' || mutation.attributeName === 'data-url')) {
+            debugLog('Process', `URL attribute changed, reprocessing`);
             observer.disconnect();
             delete img.dataset.urlObserverAdded;
             processImage(img);
@@ -477,11 +600,13 @@ async function processImage(img) {
 
   // Skip animated images
   if (isAnimatedImage(actualUrl)) {
+    debugLog('Process', `SKIP: Animated image (GIF/emoji)`, { url: actualUrl });
     return;
   }
 
   // Check if this is a manga image using site-specific handler
   if (!currentSiteHandler.isMangaImage(img)) {
+    debugLog('Process', `SKIP: Not a manga image (handler rejected)`, { url: actualUrl?.substring(0, 80) });
     return;
   }
 
@@ -489,19 +614,23 @@ async function processImage(img) {
 
   // Check size criteria
   if (!meetsImageCriteria(img)) {
+    debugLog('Process', `SKIP: Does not meet size criteria`, { url: actualUrl?.substring(0, 80) });
     return;
   }
 
   // Skip if already processed
   if (processedImages.has(imageId)) {
+    debugLog('Process', `SKIP: Already processed`, { url: actualUrl?.substring(0, 80) });
     return;
   }
 
   // Skip if already in queue
   if (imageQueue.some(item => item.imageId === imageId)) {
+    debugLog('Process', `SKIP: Already in queue`, { url: actualUrl?.substring(0, 80) });
     return;
   }
 
+  debugLog('Process', `QUEUED: Adding image to upscale queue`, { url: actualUrl, imageId: imageId.substring(0, 20) });
   pageStats.totalDetected++;
 
   const queueItem = {
@@ -526,9 +655,16 @@ async function processImage(img) {
  * Process the image queue sequentially
  */
 async function processQueue() {
-  if (isProcessingQueue) return;
-  if (imageQueue.length === 0) return;
+  if (isProcessingQueue) {
+    debugLog('Queue', `Queue already processing, skipping`);
+    return;
+  }
+  if (imageQueue.length === 0) {
+    debugLog('Queue', `Queue is empty, nothing to process`);
+    return;
+  }
 
+  debugLog('Queue', `Starting queue processing, ${imageQueue.length} items`);
   isProcessingQueue = true;
 
   while (imageQueue.length > 0) {
@@ -536,18 +672,29 @@ async function processQueue() {
     const { img, imageId, actualUrl } = queueItem;
 
     const imageUrl = actualUrl || currentSiteHandler.getImageUrl(img) || img.src;
+    debugLog('Queue', `Processing image: ${imageUrl?.substring(0, 80)}...`);
 
     try {
       const startTime = Date.now();
 
       // Extract image data using canvas or fetch fallback
+      debugLog('Queue', `Step 1: Extracting image data...`);
       const imageBase64 = await extractImageAsBase64(img, imageUrl);
+      debugLog('Queue', `Step 1 COMPLETE: Got base64 (${imageBase64?.length} chars)`);
 
+      debugLog('Queue', `Step 2: Sending UPSCALE_IMAGE to background...`);
       const response = await chrome.runtime.sendMessage({
         type: 'UPSCALE_IMAGE',
         imageData: imageBase64,
         imageUrl: imageUrl,
         imageId: imageId
+      });
+
+      debugLog('Queue', `Step 2 COMPLETE: Got response`, {
+        success: response?.success,
+        hasDataUrl: !!response?.dataUrl,
+        dataUrlLength: response?.dataUrl?.length,
+        error: response?.error
       });
 
       if (response.success) {
@@ -560,12 +707,13 @@ async function processQueue() {
         imageCache.set(imageId, response.dataUrl);
         pageStats.totalUpscaled++;
         pageStats.upscaleTimes.push(upscaleTime);
+        debugLog('Queue', `SUCCESS: Image upscaled in ${upscaleTime.toFixed(2)}s`);
       } else {
-        console.error(`[AI Upscale] Failed to upscale image: ${response.error}`);
+        debugError('Queue', `FAILED: Upscale returned error: ${response?.error}`);
         removeLoadingIndicator(img);
       }
     } catch (error) {
-      console.error('[AI Upscale] Error processing image:', error);
+      debugError('Queue', `EXCEPTION during processing: ${error.message}`, error);
       removeLoadingIndicator(img);
     }
 
@@ -573,6 +721,7 @@ async function processQueue() {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
 
+  debugLog('Queue', `Queue processing complete. Total upscaled: ${pageStats.totalUpscaled}`);
   isProcessingQueue = false;
   saveSessionStatistics();
 }
@@ -582,13 +731,18 @@ async function processQueue() {
  */
 function detectAndProcessImages() {
   const images = Array.from(document.querySelectorAll('img'));
+  debugLog('Detect', `Found ${images.length} total <img> elements on page`);
 
   // Sort images by vertical position
   images.sort((a, b) => getImageVerticalPosition(a) - getImageVerticalPosition(b));
 
-  images.forEach((img) => {
+  debugLog('Detect', `Processing images in order of vertical position...`);
+  images.forEach((img, index) => {
+    debugLog('Detect', `--- Image ${index + 1}/${images.length} ---`);
     processImage(img);
   });
+
+  debugLog('Detect', `Initial scan complete. Queue size: ${imageQueue.length}, Detected: ${pageStats.totalDetected}`);
 }
 
 // =============================================================================
@@ -791,26 +945,49 @@ function startImageDetection() {
  * Initialize content script
  */
 function init() {
+  console.log('[AI Upscale] ========================================');
+  console.log('[AI Upscale] Content script initializing...');
+  console.log('[AI Upscale] URL:', window.location.href);
+  console.log('[AI Upscale] Hostname:', window.location.hostname);
+  console.log('[AI Upscale] ========================================');
+
   // Get site handler first
   currentSiteHandler = getSiteHandler();
+  debugLog('Init', `Site handler selected: ${currentSiteHandler.name}`, {
+    needsBackgroundFetch: currentSiteHandler.needsBackgroundFetch
+  });
 
   // Only proceed if on a supported site
   if (!isSupportedSite()) {
     console.log('[AI Upscale] Not a supported site, extension inactive');
+    console.log('[AI Upscale] Supported sites:', Object.keys(SITE_HANDLERS).join(', '));
     return;
   }
 
+  debugLog('Init', `Site is supported, checking storage settings...`);
+
   chrome.storage.local.get(['enabled', 'whitelist', 'blacklist'], (result) => {
     isEnabled = result.enabled !== undefined ? result.enabled : CONFIG.enabledByDefault;
+    debugLog('Init', `Extension enabled: ${isEnabled} (from storage: ${result.enabled}, default: ${CONFIG.enabledByDefault})`);
 
-    if (isEnabled && currentSiteHandler.isReadingPage()) {
+    const isReading = currentSiteHandler.isReadingPage();
+    debugLog('Init', `Is reading page: ${isReading}`);
+
+    if (isEnabled && isReading) {
+      debugLog('Init', `Starting image detection...`);
       startImageDetection();
+    } else if (!isEnabled) {
+      debugLog('Init', `Extension is disabled, not starting detection`);
+    } else if (!isReading) {
+      debugLog('Init', `Not on a reading page, not starting detection`);
     }
   });
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    debugLog('Message', `Received message: ${request.type}`);
     if (request.type === 'TOGGLE_EXTENSION') {
       isEnabled = request.enabled;
+      debugLog('Message', `Extension toggled: ${isEnabled}`);
       if (isEnabled) {
         startImageDetection();
       }
