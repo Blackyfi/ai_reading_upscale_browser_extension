@@ -40,6 +40,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return false;
   }
 
+  if (request.type === 'FETCH_IMAGE') {
+    // Fetch image from background script (bypasses CORS)
+    fetchImageAsBase64(request.imageUrl)
+      .then(base64 => sendResponse({ success: true, base64 }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
   if (request.type === 'CLEAR_CACHE') {
     clearServerCache()
       .then(sendResponse)
@@ -232,6 +240,14 @@ function blobToDataUrl(blob) {
 async function dataUrlToBlob(dataUrl) {
   const response = await fetch(dataUrl);
   return response.blob();
+}
+
+/**
+ * Fetch image and convert to base64 (used by content script to bypass CORS)
+ */
+async function fetchImageAsBase64(imageUrl) {
+  const blob = await fetchImageWithRetry(imageUrl);
+  return blobToDataUrl(blob);
 }
 
 /**
