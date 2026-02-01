@@ -53,6 +53,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }
+
+  if (request.type === 'GET_MODELS') {
+    getModels()
+      .then(sendResponse)
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.type === 'SWITCH_MODEL') {
+    switchModel(request.model)
+      .then(sendResponse)
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
 });
 
 /**
@@ -220,6 +234,53 @@ async function clearServerCache() {
     return { success: true, message: data.message };
   } catch (error) {
     throw new Error(`Failed to clear cache: ${error.message}`);
+  }
+}
+
+/**
+ * Get available models from server
+ */
+async function getModels() {
+  try {
+    const response = await fetch(`${SERVER_URL}/models`, {
+      method: 'GET',
+      mode: 'cors'
+    });
+
+    if (!response.ok) {
+      throw new Error(`Server error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return { success: true, ...data };
+  } catch (error) {
+    throw new Error(`Failed to get models: ${error.message}`);
+  }
+}
+
+/**
+ * Switch to a different model
+ */
+async function switchModel(modelKey) {
+  try {
+    const response = await fetch(`${SERVER_URL}/switch-model`, {
+      method: 'POST',
+      mode: 'cors',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ model: modelKey })
+    });
+
+    if (!response.ok) {
+      const data = await response.json();
+      throw new Error(data.error || `Server error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return { success: true, ...data };
+  } catch (error) {
+    throw new Error(`Failed to switch model: ${error.message}`);
   }
 }
 

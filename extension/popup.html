@@ -32,6 +32,18 @@
           <span class="indicator-text">Checking...</span>
         </span>
       </div>
+
+      <div class="status-item model-selector-container">
+        <span class="status-label">Model:</span>
+        <div class="model-selector-wrapper">
+          <select id="modelSelect" class="model-select" disabled>
+            <option value="">Loading...</option>
+          </select>
+          <div class="model-loading-spinner" id="modelLoadingSpinner" style="display: none;">
+            <div class="spinner"></div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section class="actions-section">

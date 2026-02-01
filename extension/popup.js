@@ -21,6 +21,8 @@ const checkServerBtn = document.getElementById('checkServerBtn');
 const toggleExtension = document.getElementById('toggleExtension');
 const extensionStatus = document.getElementById('extensionStatus');
 const serverStatus = document.getElementById('serverStatus');
+const modelSelect = document.getElementById('modelSelect');
+const modelLoadingSpinner = document.getElementById('modelLoadingSpinner');
 
 init();
 
@@ -41,10 +43,12 @@ function init() {
   checkServer();
   loadStatistics();
   loadPageStatistics();
+  loadModels();
 
   toggleExtension.addEventListener('change', handleToggle);
   clearCacheBtn.addEventListener('click', handleClearCache);
   checkServerBtn.addEventListener('click', handleCheckServer);
+  modelSelect.addEventListener('change', handleModelChange);
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'PAGE_STATS_UPDATE') {
@@ -423,9 +427,100 @@ async function handleCheckServer() {
 
   await checkServer();
   await loadStatistics();
+  await loadModels();
 
   checkServerBtn.disabled = false;
   checkServerBtn.textContent = 'Check Server';
+}
+
+/**
+ * Load available models from server
+ */
+async function loadModels() {
+  try {
+    const response = await fetch('http://127.0.0.1:5000/models');
+    if (response.ok) {
+      const data = await response.json();
+      updateModelSelector(data.models, data.current, data.loading);
+    } else {
+      modelSelect.disabled = true;
+      modelSelect.innerHTML = '<option value="">Server unavailable</option>';
+    }
+  } catch (error) {
+    console.error('Error loading models:', error);
+    modelSelect.disabled = true;
+    modelSelect.innerHTML = '<option value="">Server unavailable</option>';
+  }
+}
+
+/**
+ * Update model selector dropdown
+ */
+function updateModelSelector(models, current, isLoading) {
+  modelSelect.innerHTML = '';
+
+  models.forEach(model => {
+    if (model.available) {
+      const option = document.createElement('option');
+      option.value = model.id;
+      option.textContent = model.name;
+      option.selected = model.id === current;
+      modelSelect.appendChild(option);
+    }
+  });
+
+  if (isLoading) {
+    modelSelect.disabled = true;
+    modelSelect.classList.add('loading');
+    modelLoadingSpinner.style.display = 'flex';
+  } else {
+    modelSelect.disabled = false;
+    modelSelect.classList.remove('loading');
+    modelLoadingSpinner.style.display = 'none';
+  }
+}
+
+/**
+ * Handle model selection change
+ */
+async function handleModelChange() {
+  const selectedModel = modelSelect.value;
+
+  if (!selectedModel) return;
+
+  // Show loading state
+  modelSelect.disabled = true;
+  modelSelect.classList.add('loading');
+  modelLoadingSpinner.style.display = 'flex';
+
+  try {
+    const response = await fetch('http://127.0.0.1:5000/switch-model', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ model: selectedModel })
+    });
+
+    const data = await response.json();
+
+    if (response.ok && data.success) {
+      showMessage(`Switched to ${data.message.replace('Switched to ', '')}`);
+    } else {
+      showMessage(data.error || 'Failed to switch model', true);
+      // Reload models to reset selector to current model
+      await loadModels();
+    }
+  } catch (error) {
+    console.error('Error switching model:', error);
+    showMessage('Error switching model', true);
+    await loadModels();
+  } finally {
+    // Hide loading state
+    modelSelect.disabled = false;
+    modelSelect.classList.remove('loading');
+    modelLoadingSpinner.style.display = 'none';
+  }
 }
 
 /**

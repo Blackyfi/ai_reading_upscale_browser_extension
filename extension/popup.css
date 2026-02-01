@@ -177,6 +177,71 @@ input:checked + .slider:before {
   font-weight: 500;
 }
 
+/* Model Selector */
+.model-selector-container {
+  margin-top: 5px;
+}
+
+.model-selector-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.model-select {
+  padding: 6px 10px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 12px;
+  background: white;
+  color: #333;
+  cursor: pointer;
+  min-width: 140px;
+  transition: border-color 0.2s, opacity 0.2s;
+}
+
+.model-select:hover:not(:disabled) {
+  border-color: #667eea;
+}
+
+.model-select:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+}
+
+.model-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: #f5f5f5;
+}
+
+.model-select.loading {
+  opacity: 0.6;
+}
+
+/* Loading Spinner */
+.model-loading-spinner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #e0e0e0;
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Stats Section */
 .stats-grid {
   display: grid;
