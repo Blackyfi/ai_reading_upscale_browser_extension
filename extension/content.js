@@ -107,10 +107,23 @@ function startImageDetection() {
 }
 
 /**
+ * Get vertical position of an image on the page
+ */
+function getImageVerticalPosition(img) {
+  const rect = img.getBoundingClientRect();
+  const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+  return rect.top + scrollTop;
+}
+
+/**
  * Detect and process all images on the page
  */
 function detectAndProcessImages() {
-  const images = document.querySelectorAll('img');
+  const images = Array.from(document.querySelectorAll('img'));
+
+  // Sort images by their vertical position (top of page first)
+  images.sort((a, b) => getImageVerticalPosition(a) - getImageVerticalPosition(b));
+
   images.forEach((img) => {
     processImage(img);
   });
@@ -300,11 +313,15 @@ async function processImage(img) {
     img,
     imageId,
     actualUrl, // Store the actual URL for upscaling
+    verticalPosition: getImageVerticalPosition(img), // Store position for sorting
     status: 'queued',
     progress: 0,
     startTime: Date.now()
   };
   imageQueue.push(queueItem);
+
+  // Sort queue by vertical position to ensure top images are processed first
+  imageQueue.sort((a, b) => a.verticalPosition - b.verticalPosition);
   updatePageStatsQueue();
   addLoadingIndicator(img);
   processQueue();
