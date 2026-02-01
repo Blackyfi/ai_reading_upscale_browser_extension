@@ -9,6 +9,7 @@ import numpy as np
 from realesrgan import RealESRGANer
 from basicsr.archs.rrdbnet_arch import RRDBNet
 from realesrgan.archs.srvgg_arch import SRVGGNetCompact
+import spandrel
 from PIL import Image
 import io
 import time
@@ -32,26 +33,143 @@ CACHE_FOLDER.mkdir(exist_ok=True)
 
 # Model configurations
 MODELS = {
-    'slow': {
-        'name': 'High Quality (Slow)',
+    'general_x2': {
+        'name': 'General x2 (RealESRGAN)',
+        'file': 'RealESRGAN_x2plus.pth',
+        'arch': 'rrdbnet',
+        'scale': 2,
+        'num_block': 23,
+        'description': 'General purpose 2x upscaling'
+    },
+    'manga_x2': {
+        'name': 'Manga x2 (MangaScale)',
+        'file': '2x_MangaScaleV3.pth',
+        'arch': 'spandrel',
+        'scale': 2,
+        'description': 'Best for manga/manhwa, preserves halftones'
+    },
+    'anime_x4': {
+        'name': 'Anime x4 (High Quality)',
         'file': 'RealESRGAN_x4plus_anime_6B.pth',
         'arch': 'rrdbnet',
-        'description': 'Higher quality, slower processing'
+        'scale': 4,
+        'num_block': 6,
+        'description': 'High quality 4x for anime/manga, slower'
     },
-    'fast': {
-        'name': 'Fast (Compact)',
+    'fast_x4': {
+        'name': 'Fast x4 (Compact)',
         'file': 'realesr-animevideov3.pth',
         'arch': 'compact',
-        'description': 'Faster processing, optimized for video/animation'
+        'scale': 4,
+        'description': 'Fast 4x upscaling, optimized for video/animation'
     }
 }
 
 # Global upscaler instance and current model
 upscaler = None
-current_model = 'slow'
+current_model = 'general_x2'
 model_loading = False
 
-def init_upscaler(model_key='slow'):
+
+class SpandrelUpscaler:
+    """Wrapper for spandrel models to match RealESRGANer interface"""
+
+    def __init__(self, model_path, scale, tile=512, tile_pad=10, half=True, device='cuda'):
+        self.scale = scale
+        self.tile = tile
+        self.tile_pad = tile_pad
+        self.half = half
+        self.device = device
+
+        # Load model using spandrel
+        self.model = spandrel.ModelLoader().load_from_file(model_path).model
+        self.model = self.model.to(device)
+        if half:
+            self.model = self.model.half()
+        self.model.eval()
+
+    def enhance(self, img, outscale=None):
+        """Upscale image, returns (output, None) to match RealESRGANer interface"""
+        if outscale is None:
+            outscale = self.scale
+
+        h, w = img.shape[:2]
+
+        # Convert to tensor
+        img_tensor = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
+        img_tensor = img_tensor.unsqueeze(0).to(self.device)
+        if self.half:
+            img_tensor = img_tensor.half()
+
+        # Process with tiling for large images
+        with torch.no_grad():
+            if h * w > self.tile * self.tile:
+                output = self._tile_process(img_tensor)
+            else:
+                output = self.model(img_tensor)
+
+        # Convert back to numpy
+        output = output.squeeze(0).permute(1, 2, 0).float().cpu().numpy()
+        output = (output * 255.0).clip(0, 255).astype(np.uint8)
+
+        # Resize if outscale differs from model scale
+        if outscale != self.scale:
+            h_out, w_out = int(h * outscale), int(w * outscale)
+            output = np.array(Image.fromarray(output).resize((w_out, h_out), Image.LANCZOS))
+
+        return output, None
+
+    def _tile_process(self, img):
+        """Process image in tiles to save memory"""
+        batch, channel, height, width = img.shape
+        output_height = height * self.scale
+        output_width = width * self.scale
+        output = torch.zeros((batch, channel, output_height, output_width),
+                           dtype=img.dtype, device=img.device)
+
+        tile = self.tile
+        tile_pad = self.tile_pad
+
+        tiles_x = (width + tile - 1) // tile
+        tiles_y = (height + tile - 1) // tile
+
+        for y in range(tiles_y):
+            for x in range(tiles_x):
+                # Calculate tile boundaries with padding
+                x_start = x * tile
+                y_start = y * tile
+                x_end = min(x_start + tile, width)
+                y_end = min(y_start + tile, height)
+
+                # Add padding
+                x_start_pad = max(x_start - tile_pad, 0)
+                y_start_pad = max(y_start - tile_pad, 0)
+                x_end_pad = min(x_end + tile_pad, width)
+                y_end_pad = min(y_end + tile_pad, height)
+
+                # Extract and process tile
+                tile_input = img[:, :, y_start_pad:y_end_pad, x_start_pad:x_end_pad]
+                tile_output = self.model(tile_input)
+
+                # Calculate output positions
+                out_x_start = x_start * self.scale
+                out_y_start = y_start * self.scale
+                out_x_end = x_end * self.scale
+                out_y_end = y_end * self.scale
+
+                # Calculate padding offsets in output
+                pad_left = (x_start - x_start_pad) * self.scale
+                pad_top = (y_start - y_start_pad) * self.scale
+                pad_right = pad_left + (x_end - x_start) * self.scale
+                pad_bottom = pad_top + (y_end - y_start) * self.scale
+
+                output[:, :, out_y_start:out_y_end, out_x_start:out_x_end] = \
+                    tile_output[:, :, pad_top:pad_bottom, pad_left:pad_right]
+
+        return output
+
+
+def init_upscaler(model_key='general_x2'):
     """Initialize RealESRGAN model"""
     global upscaler, current_model, model_loading
 
@@ -91,14 +209,37 @@ def init_upscaler(model_key='slow'):
             torch.cuda.synchronize()
 
         # Create model based on architecture
-        if model_config['arch'] == 'rrdbnet':
+        scale = model_config.get('scale', 2)
+        num_block = model_config.get('num_block', 23)
+
+        if model_config['arch'] == 'spandrel':
+            # Use spandrel for models with non-standard architectures
+            upscaler = SpandrelUpscaler(
+                model_path=str(model_path),
+                scale=scale,
+                tile=512,
+                tile_pad=10,
+                half=True,
+                device='cuda'
+            )
+        elif model_config['arch'] == 'rrdbnet':
             model = RRDBNet(
                 num_in_ch=3,
                 num_out_ch=3,
                 num_feat=64,
-                num_block=6,
+                num_block=num_block,
                 num_grow_ch=32,
-                scale=4
+                scale=scale
+            )
+            upscaler = RealESRGANer(
+                scale=scale,
+                model_path=str(model_path),
+                model=model,
+                tile=512,
+                tile_pad=10,
+                pre_pad=0,
+                half=True,
+                device='cuda'
             )
         elif model_config['arch'] == 'compact':
             model = SRVGGNetCompact(
@@ -106,24 +247,23 @@ def init_upscaler(model_key='slow'):
                 num_out_ch=3,
                 num_feat=64,
                 num_conv=16,
-                upscale=4,
+                upscale=scale,
                 act_type='prelu'
+            )
+            upscaler = RealESRGANer(
+                scale=scale,
+                model_path=str(model_path),
+                model=model,
+                tile=512,
+                tile_pad=10,
+                pre_pad=0,
+                half=True,
+                device='cuda'
             )
         else:
             logger.error(f"Unknown architecture: {model_config['arch']}")
             model_loading = False
             return False
-
-        upscaler = RealESRGANer(
-            scale=4,
-            model_path=str(model_path),
-            model=model,
-            tile=512,
-            tile_pad=10,
-            pre_pad=0,
-            half=True,
-            device='cuda'
-        )
 
         current_model = model_key
         model_loading = False
@@ -242,7 +382,9 @@ def upscale_image():
         if len(image_bytes) > MAX_FILE_SIZE:
             return jsonify({'error': 'File size exceeds limit'}), 400
 
-        cache_key = get_image_hash(image_bytes)
+        image_hash = get_image_hash(image_bytes)
+        model_scale = MODELS[current_model]['scale']
+        cache_key = f"{image_hash}_{current_model}"
         cache_path = CACHE_FOLDER / f"{cache_key}.png"
 
         if cache_path.exists():
@@ -256,8 +398,8 @@ def upscale_image():
 
         img_np = np.array(image)
 
-        logger.info(f"Upscaling image {cache_key} with model '{current_model}'...")
-        output, _ = upscaler.enhance(img_np, outscale=2)
+        logger.info(f"Upscaling image {image_hash} with model '{current_model}' (x{model_scale})...")
+        output, _ = upscaler.enhance(img_np, outscale=model_scale)
 
         output_image = Image.fromarray(output)
         output_image.save(cache_path, 'PNG')

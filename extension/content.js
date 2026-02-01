@@ -159,6 +159,32 @@ function isUIElement(img) {
     return true;
   }
 
+  // Webtoon: Only process images on viewer pages (actual chapter reading)
+  // Skip thumbnails/posters on homepage, list pages, and rankings
+  if (window.location.hostname.includes('webtoons.com')) {
+    const currentUrl = window.location.href.toLowerCase();
+    const isViewerPage = currentUrl.includes('/viewer');
+
+    // If not on a viewer page, skip all images (homepage, list, rankings, etc.)
+    if (!isViewerPage) {
+      return true;
+    }
+
+    // On viewer pages, only process actual chapter content images
+    // Chapter content images have class "_images" and are in the #_imageList container
+    // Episode thumbnails have class "_thumbnailImages" and should be skipped
+    if (className.includes('_images')) {
+      // Filter out any remaining thumbnails by URL pattern
+      if (src.includes('/thumb_') || src.includes('thumb_poster')) {
+        return true;
+      }
+      return false; // This is actual chapter content
+    }
+
+    // Skip all other images on viewer pages (thumbnails, UI, etc.)
+    return true;
+  }
+
   const uiPatterns = [
     'icon', 'logo', 'avatar', 'profile', 'button', 'banner',
     'badge', 'emoji', 'spinner', 'loading', 'placeholder',
@@ -201,7 +227,6 @@ async function processImage(img) {
     return;
   }
 
-  pageStats.totalDetected++;
   const imageId = getImageId(img);
 
   // Check size criteria before processing (allows re-checking lazy-loaded images)
@@ -217,6 +242,10 @@ async function processImage(img) {
   if (imageQueue.some(item => item.imageId === imageId)) {
     return;
   }
+
+  // Only count as detected after all validation and deduplication checks pass
+  pageStats.totalDetected++;
+
   const queueItem = {
     img,
     imageId,
