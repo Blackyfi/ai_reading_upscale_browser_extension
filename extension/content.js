@@ -1,22 +1,17 @@
-// Content script for AI Reading Upscale Extension
-
-// Configuration
 const CONFIG = {
   minImageWidth: 200,
   minImageHeight: 200,
   maxImageWidth: 2000,
-  maxImageHeight: 20000,  // Increased for manhwa/webtoons (typically 15000-16000px tall)
+  maxImageHeight: 20000,  // Increased for manhwa/webtoons
   enabledByDefault: false
 };
 
-// State
 let isEnabled = CONFIG.enabledByDefault;
 let processedImages = new Set();
 let imageCache = new Map();
 let imageQueue = [];
 let isProcessingQueue = false;
 
-// Page statistics
 let pageStats = {
   totalDetected: 0,
   totalUpscaled: 0,
@@ -25,7 +20,6 @@ let pageStats = {
   queue: []
 };
 
-// Manga/Manhwa site patterns
 const MANGA_SITES = [
   'mangadex.org',
   'mangaplus.shueisha.co.jp',
@@ -40,37 +34,28 @@ const MANGA_SITES = [
   'asuracomic.net'
 ];
 
-// Initialize
 init();
 
 /**
  * Initialize content script
  */
 function init() {
-  // Load settings from storage
   chrome.storage.local.get(['enabled', 'whitelist', 'blacklist'], (result) => {
     isEnabled = result.enabled !== undefined ? result.enabled : CONFIG.enabledByDefault;
 
-    if (isEnabled) {
-      // Check if current site should be processed
-      if (shouldProcessSite()) {
-        startImageDetection();
-      }
+    if (isEnabled && shouldProcessSite()) {
+      startImageDetection();
     }
   });
 
-  // Listen for messages from popup
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'TOGGLE_EXTENSION') {
       isEnabled = request.enabled;
       if (isEnabled) {
         startImageDetection();
-      } else {
-        // Optionally revert images
       }
       sendResponse({ success: true });
     } else if (request.type === 'GET_PAGE_STATS') {
-      // Return current page statistics
       sendResponse({
         success: true,
         stats: {
@@ -90,23 +75,18 @@ function init() {
 }
 
 /**
- * Check if current site should be processed
+ * Check if current site is a known manga/manhwa site
  */
 function shouldProcessSite() {
-  const hostname = window.location.hostname;
-
-  // Check if it's a known manga site
-  return MANGA_SITES.some(site => hostname.includes(site));
+  return MANGA_SITES.some(site => window.location.hostname.includes(site));
 }
 
 /**
- * Start image detection and processing
+ * Start image detection with MutationObserver for dynamic content
  */
 function startImageDetection() {
-  // Process existing images
   detectAndProcessImages();
 
-  // Set up MutationObserver for dynamically loaded images
   const observer = new MutationObserver((mutations) => {
     mutations.forEach((mutation) => {
       mutation.addedNodes.forEach((node) => {
@@ -131,36 +111,23 @@ function startImageDetection() {
  */
 function detectAndProcessImages() {
   const images = document.querySelectorAll('img');
-  console.log(`Found ${images.length} images on page`);
-
   images.forEach((img) => {
     processImage(img);
   });
 }
 
 /**
- * Check if image is animated (GIF, APNG, WebP animation)
+ * Check if image is animated (GIF, emoji, spinner)
  */
 function isAnimatedImage(src) {
   if (!src) return false;
-
   const lowerSrc = src.toLowerCase();
-
-  // Block GIF files
-  if (lowerSrc.endsWith('.gif') || lowerSrc.includes('.gif?')) {
-    return true;
-  }
-
-  // Block common animated formats
-  if (lowerSrc.includes('/gif/') || lowerSrc.includes('emoji') || lowerSrc.includes('spinner')) {
-    return true;
-  }
-
-  return false;
+  return lowerSrc.endsWith('.gif') || lowerSrc.includes('.gif?') ||
+         lowerSrc.includes('/gif/') || lowerSrc.includes('emoji') || lowerSrc.includes('spinner');
 }
 
 /**
- * Check if image is a UI element (icon, logo, profile picture, etc.)
+ * Check if image is a UI element rather than manga content
  */
 function isUIElement(img) {
   if (!img) return false;
@@ -169,53 +136,29 @@ function isUIElement(img) {
   const alt = img.alt ? img.alt.toLowerCase() : '';
   const className = img.className ? img.className.toLowerCase() : '';
 
-  // For mangadex.org, handle blob URLs and check class patterns FIRST
-  // This must be checked before other filters that might reject manga images
+  // MangaDex uses blob URLs for chapter pages with class="img ls limit-width"
+  // Must check before other filters that might reject manga images
   if (window.location.hostname.includes('mangadex.org')) {
-    // Mangadex uses blob URLs for chapter pages with class="img ls limit-width"
-    // These are the manga page images we want to upscale
     if (className.includes('img') && className.includes('limit-width')) {
-      console.log('[MANGADEX] Processing manga page image:', src, 'alt:', alt);
       return false;
     }
-
-    // Everything else on mangadex is likely UI
     return true;
   }
 
-  // For asuracomic.net, only process images that are clearly manga panels
+  // AsuraComic: Only process chapter page images, not covers or thumbnails
   if (window.location.hostname.includes('asuracomic.net')) {
-    // Check if the src is from the storage/media path (manga images)
     const isMangaPath = src.includes('/storage/media/');
-
-    // If it's from /storage/media/, check if it's a chapter page (not a thumbnail/cover)
     if (isMangaPath) {
-      // Chapter page images have patterns like:
-      // - /storage/media/<ID>/<number>.jpg (e.g., /storage/media/411950/00.jpg)
-      // - /storage/media/<ID>/conversions/<number>-optimized.webp
       const isChapterPage = /\/storage\/media\/\d+\/(\d{2}\.(jpg|png|webp)|conversions\/\d{2}-optimized\.(jpg|png|webp))/.test(src);
-
-      // Also check alt text for "chapter page"
       const hasChapterAlt = alt.includes('chapter page');
-
-      console.log('[ASURA DEBUG] Image:', src, '| isChapterPage:', isChapterPage, '| hasChapterAlt:', hasChapterAlt);
-
-      // If it matches the chapter page pattern OR has chapter page alt text, it's NOT a UI element
       if (isChapterPage || hasChapterAlt) {
-        console.log('[ASURA] Processing chapter image:', src);
         return false;
       }
-
-      // If it's from storage/media but not a chapter page, it's likely a cover/thumbnail (UI element)
-      console.log('[ASURA] Skipping non-chapter image:', src);
       return true;
     }
-
-    // If not from /storage/media/, it's likely a UI element
     return true;
   }
 
-  // Check for common UI element patterns in src
   const uiPatterns = [
     'icon', 'logo', 'avatar', 'profile', 'button', 'banner',
     'badge', 'emoji', 'spinner', 'loading', 'placeholder',
@@ -229,19 +172,14 @@ function isUIElement(img) {
     }
   }
 
-  // Check for profile pictures and UI images by class
   if (className.includes('rounded-full') || className.includes('rounded-circle')) {
     return true;
   }
 
-  // Check if alt text indicates it's not a manga page
   if (alt && !alt.includes('chapter') && !alt.includes('page') && !alt.includes('comic')) {
-    // If alt exists but doesn't mention chapter/page/comic, it might be UI
     const nonMangaAltPatterns = ['user', 'profile', 'close', 'menu', 'search'];
     for (const pattern of nonMangaAltPatterns) {
-      if (alt.includes(pattern)) {
-        return true;
-      }
+      if (alt.includes(pattern)) return true;
     }
   }
 
@@ -255,63 +193,40 @@ async function processImage(img) {
   if (!isEnabled) return;
   if (!img.src) return;
 
-  // Skip GIF files and other animated formats
   if (isAnimatedImage(img.src)) {
-    console.log('[SKIP] Animated image:', img.src);
     return;
   }
 
-  // Skip UI elements, icons, and other non-manga images
   if (isUIElement(img)) {
-    console.log('[SKIP] UI element:', img.src);
     return;
   }
 
-  console.log('[DETECT] Found manga image:', img.src, 'alt:', img.alt);
-
-  // Increment detected images count
   pageStats.totalDetected++;
-
-  // Generate unique ID for this image
   const imageId = getImageId(img);
 
-  // Check if image meets size criteria BEFORE checking if processed
-  // This allows images to be re-checked after they load
+  // Check size criteria before processing (allows re-checking lazy-loaded images)
   if (!meetsImageCriteria(img)) {
-    console.log('[SKIP] Does not meet size criteria:', img.src, 'Size:', img.naturalWidth, 'x', img.naturalHeight);
     return;
   }
 
-  // Skip if already processed (after size check, so lazy-loaded images can be re-evaluated)
+  // Skip if already processed (after size check for lazy-loaded image re-evaluation)
   if (processedImages.has(imageId)) {
-    console.log('[SKIP] Already processed:', img.src);
     return;
   }
 
-  // Skip if already in queue
   if (imageQueue.some(item => item.imageId === imageId)) {
-    console.log('[SKIP] Already in queue:', img.src);
     return;
   }
-
-  // Add to queue
-  console.log('[QUEUE] Adding image to queue:', img.src);
-  const queueItem = { 
-    img, 
-    imageId, 
+  const queueItem = {
+    img,
+    imageId,
     status: 'queued',
     progress: 0,
     startTime: Date.now()
   };
   imageQueue.push(queueItem);
-  
-  // Update page stats queue
   updatePageStatsQueue();
-  
-  // Add loading indicator
   addLoadingIndicator(img);
-  
-  // Start processing queue if not already running
   processQueue();
 }
 
@@ -327,41 +242,27 @@ function updatePageStatsQueue() {
     startTime: item.startTime || Date.now()
   }));
 
-  // Notify popup of stats update
   chrome.runtime.sendMessage({
     type: 'PAGE_STATS_UPDATE',
     data: pageStats
-  }).catch(() => {
-    // Popup not open, ignore
-  });
+  }).catch(() => {}); // Popup not open
 }
 
 /**
  * Process the image queue sequentially
  */
 async function processQueue() {
-  // If already processing, exit
-  if (isProcessingQueue) {
-    return;
-  }
-  
-  // If queue is empty, exit
-  if (imageQueue.length === 0) {
-    return;
-  }
-  
+  if (isProcessingQueue) return;
+  if (imageQueue.length === 0) return;
+
   isProcessingQueue = true;
-  
+
   while (imageQueue.length > 0) {
     const queueItem = imageQueue.shift();
     const { img, imageId } = queueItem;
-    
-    console.log(`[PROCESSING] Processing image ${imageId} (${imageQueue.length} remaining in queue)`);
-    
+
     try {
       const startTime = Date.now();
-
-      // Request upscaling from background script
       const response = await chrome.runtime.sendMessage({
         type: 'UPSCALE_IMAGE',
         imageUrl: img.src,
@@ -372,43 +273,30 @@ async function processQueue() {
         const endTime = Date.now();
         const upscaleTime = (endTime - startTime) / 1000;
 
-        // Mark as processed ONLY after successful upscaling
+        // Mark as processed only after successful upscaling
         processedImages.add(imageId);
-        
-        // Replace image with upscaled version
         replaceImage(img, response.dataUrl);
         removeLoadingIndicator(img);
-
-        // Cache the result
         imageCache.set(imageId, response.dataUrl);
-
-        // Update statistics
         pageStats.totalUpscaled++;
         pageStats.upscaleTimes.push(upscaleTime);
-
-        console.log(`[SUCCESS] Image upscaled: ${imageId} (took ${upscaleTime.toFixed(2)}s)`);
       } else {
-        console.error(`[ERROR] Failed to upscale image: ${response.error}`);
+        console.error(`Failed to upscale image: ${response.error}`);
         removeLoadingIndicator(img);
-        // Don't mark as processed so it can be retried
+        // Don't mark as processed to allow retry
       }
     } catch (error) {
-      console.error('[ERROR] Error processing image:', error);
+      console.error('Error processing image:', error);
       removeLoadingIndicator(img);
-      // Don't mark as processed so it can be retried
+      // Don't mark as processed to allow retry
     }
-    
-    // Update page stats
+
     updatePageStatsQueue();
-    
-    // Small delay between images to avoid overwhelming the server
+    // Small delay to avoid overwhelming server
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  
-  isProcessingQueue = false;
-  console.log('[QUEUE] All images processed');
 
-  // Save session statistics
+  isProcessingQueue = false;
   saveSessionStatistics();
 }
 
@@ -419,40 +307,33 @@ function meetsImageCriteria(img) {
   const width = img.naturalWidth;
   const height = img.naturalHeight;
 
-  // If dimensions are not available yet (lazy-loaded images), wait for load
+  // Wait for lazy-loaded images to have dimensions
   if (width === 0 || height === 0 || !img.complete) {
-    // Check if we already added a load listener to avoid duplicates
     if (!img.dataset.loadListenerAdded) {
       img.dataset.loadListenerAdded = 'true';
       img.addEventListener('load', () => {
-        console.log('[LOAD EVENT] Image loaded, reprocessing:', img.src, 'New size:', img.naturalWidth, 'x', img.naturalHeight);
-        delete img.dataset.loadListenerAdded; // Remove marker so it can be processed
+        delete img.dataset.loadListenerAdded;
         processImage(img);
       }, { once: true });
     }
     return false;
   }
 
-  // Check size constraints
   if (width < CONFIG.minImageWidth || height < CONFIG.minImageHeight) {
-    console.log('[SKIP] Does not meet minImageWidth criteria:', img.src, 'Size:', img.naturalWidth, 'x', img.naturalHeight, 'Min required:', CONFIG.minImageWidth, 'x', CONFIG.minImageHeight);
     return false;
   }
 
   if (width > CONFIG.maxImageWidth || height > CONFIG.maxImageHeight) {
-    console.log('[SKIP] Does not meet maxImageWidth criteria:', img.src, 'Size:', img.naturalWidth, 'x', img.naturalHeight, 'Max allowed:', CONFIG.maxImageWidth, 'x', CONFIG.maxImageHeight);
     return false;
   }
 
-  console.log('[SIZE OK] Image meets criteria:', img.src, 'Size:', width, 'x', height);
   return true;
 }
 
 /**
- * Generate unique ID for image
+ * Generate unique ID for image using base64 encoded src
  */
 function getImageId(img) {
-  // Use full base64 encoded src for unique ID
   return btoa(img.src);
 }
 
@@ -460,37 +341,25 @@ function getImageId(img) {
  * Replace image with upscaled version
  */
 function replaceImage(img, dataUrl) {
-  // Store original attributes
-  const originalSrc = img.src;
-  img.dataset.originalSrc = originalSrc;
+  img.dataset.originalSrc = img.src;
   img.dataset.upscaled = 'true';
-
-  // Replace src with upscaled version
   img.src = dataUrl;
-
-  // Show the image now that it's upscaled
   img.style.opacity = '1';
   img.style.visibility = 'visible';
-
-  // Clean up stored states
   delete img.dataset.originalOpacity;
   delete img.dataset.originalVisibility;
 }
 
 /**
- * Add loading indicator to image
+ * Add loading indicator overlay to image
  */
 function addLoadingIndicator(img) {
-  // Store original display state
   img.dataset.originalOpacity = img.style.opacity || '1';
   img.dataset.originalVisibility = img.style.visibility || 'visible';
 
-  // Get image dimensions before hiding
-  const computedStyle = window.getComputedStyle(img);
   const width = img.offsetWidth || img.naturalWidth;
   const height = img.offsetHeight || img.naturalHeight;
 
-  // Preserve dimensions and hide the image
   if (width && height) {
     img.style.width = width + 'px';
     img.style.height = height + 'px';
@@ -498,7 +367,6 @@ function addLoadingIndicator(img) {
   img.style.opacity = '0';
   img.style.visibility = 'hidden';
 
-  // Add a semi-transparent overlay with loading animation
   const overlay = document.createElement('div');
   overlay.className = 'ai-upscale-loading';
   overlay.style.cssText = `
@@ -527,7 +395,6 @@ function addLoadingIndicator(img) {
 
   overlay.appendChild(spinner);
 
-  // Add CSS animation if not already added
   if (!document.getElementById('ai-upscale-styles')) {
     const style = document.createElement('style');
     style.id = 'ai-upscale-styles';
@@ -540,7 +407,6 @@ function addLoadingIndicator(img) {
     document.head.appendChild(style);
   }
 
-  // Position relative to image
   const parent = img.parentElement;
   if (parent && parent.style.position !== 'relative' && parent.style.position !== 'absolute') {
     parent.style.position = 'relative';
@@ -552,7 +418,7 @@ function addLoadingIndicator(img) {
 }
 
 /**
- * Remove loading indicator
+ * Remove loading indicator and restore visibility if needed
  */
 function removeLoadingIndicator(img) {
   if (img.loadingOverlay && img.loadingOverlay.parentNode) {
@@ -561,7 +427,7 @@ function removeLoadingIndicator(img) {
     delete img.dataset.loadingOverlay;
   }
 
-  // If image is still hidden (upscaling failed), restore visibility
+  // Restore visibility if upscaling failed
   if (img.style.opacity === '0' || img.style.visibility === 'hidden') {
     img.style.opacity = img.dataset.originalOpacity || '1';
     img.style.visibility = img.dataset.originalVisibility || 'visible';
@@ -570,15 +436,11 @@ function removeLoadingIndicator(img) {
   }
 }
 
-console.log('AI Reading Upscale Extension loaded');
-
 /**
  * Save session statistics to storage
  */
 function saveSessionStatistics() {
-  if (pageStats.totalUpscaled === 0) {
-    return; // Don't save empty sessions
-  }
+  if (pageStats.totalUpscaled === 0) return;
 
   const sessionDuration = (Date.now() - pageStats.startTime) / 1000;
 
@@ -590,12 +452,10 @@ function saveSessionStatistics() {
       sessions: []
     };
 
-    // Update session totals
     stats.totalUpscaled = (stats.totalUpscaled || 0) + pageStats.totalUpscaled;
     stats.totalTime = (stats.totalTime || 0) + sessionDuration;
     stats.upscaleTimes = (stats.upscaleTimes || []).concat(pageStats.upscaleTimes);
 
-    // Add current session to history
     const sessionEntry = {
       timestamp: new Date().toISOString(),
       imagesUpscaled: pageStats.totalUpscaled,
@@ -603,7 +463,7 @@ function saveSessionStatistics() {
       totalTime: sessionDuration,
       upscaleTimes: pageStats.upscaleTimes,
       pageUrl: window.location.href,
-      avgTime: pageStats.upscaleTimes.length > 0 
+      avgTime: pageStats.upscaleTimes.length > 0
         ? pageStats.upscaleTimes.reduce((a, b) => a + b, 0) / pageStats.upscaleTimes.length
         : 0
     };
@@ -616,7 +476,5 @@ function saveSessionStatistics() {
     }
 
     chrome.storage.local.set({ sessionStats: stats });
-
-    console.log('[STATS] Session saved:', sessionEntry);
   });
 }

@@ -3,7 +3,6 @@ import hashlib
 import logging
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-from werkzeug.utils import secure_filename
 from pathlib import Path
 import torch
 from realesrgan import RealESRGANer
@@ -12,34 +11,29 @@ from PIL import Image
 import io
 import time
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for Chrome extension
+CORS(app)
 
-# Configuration
 SCRIPT_DIR = Path(__file__).parent
 UPLOAD_FOLDER = SCRIPT_DIR / 'uploads'
 CACHE_FOLDER = SCRIPT_DIR / 'cache'
 MODEL_PATH = SCRIPT_DIR.parent / 'upscale_model' / 'RealESRGAN_x4plus_anime_6B.pth'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_FILE_SIZE = 10 * 1024 * 1024
 
-# Create necessary directories
 UPLOAD_FOLDER.mkdir(exist_ok=True)
 CACHE_FOLDER.mkdir(exist_ok=True)
 
 # Global upscaler instance
 upscaler = None
 
-
 def init_upscaler():
     """Initialize RealESRGAN model"""
     global upscaler
 
-    # Check for GPU availability
     if not torch.cuda.is_available():
         logger.error("=" * 60)
         logger.error("ERROR: CUDA GPU is required but not available!")
@@ -56,7 +50,6 @@ def init_upscaler():
         logger.info("Loading RealESRGAN model...")
         logger.info(f"GPU detected: {torch.cuda.get_device_name(0)}")
 
-        # Define model architecture
         model = RRDBNet(
             num_in_ch=3,
             num_out_ch=3,
@@ -66,7 +59,6 @@ def init_upscaler():
             scale=4
         )
 
-        # Initialize upscaler with GPU
         upscaler = RealESRGANer(
             scale=4,
             model_path=str(MODEL_PATH),
@@ -115,7 +107,6 @@ def upscale_image():
     if upscaler is None:
         return jsonify({'error': 'Model not loaded'}), 500
 
-    # Check if image file is in request
     if 'image' not in request.files:
         return jsonify({'error': 'No image file provided'}), 400
 
@@ -129,42 +120,30 @@ def upscale_image():
 
     try:
         start_time = time.time()
-
-        # Read image bytes
         image_bytes = file.read()
 
-        # Check file size
         if len(image_bytes) > MAX_FILE_SIZE:
             return jsonify({'error': 'File size exceeds limit'}), 400
 
-        # Generate cache key
         cache_key = get_image_hash(image_bytes)
         cache_path = CACHE_FOLDER / f"{cache_key}.png"
 
-        # Check if cached version exists
         if cache_path.exists():
             logger.info(f"Cache hit for {cache_key}")
             return send_file(cache_path, mimetype='image/png')
 
-        # Load image
         image = Image.open(io.BytesIO(image_bytes))
 
-        # Convert to RGB if necessary
         if image.mode != 'RGB':
             image = image.convert('RGB')
 
-        # Convert to numpy array
         import numpy as np
         img_np = np.array(image)
 
-        # Upscale
         logger.info(f"Upscaling image {cache_key}...")
         output, _ = upscaler.enhance(img_np, outscale=2)
 
-        # Convert back to PIL Image
         output_image = Image.fromarray(output)
-
-        # Save to cache
         output_image.save(cache_path, 'PNG')
 
         # Clean up GPU memory
@@ -177,7 +156,6 @@ def upscale_image():
         elapsed_time = time.time() - start_time
         logger.info(f"Upscaling completed in {elapsed_time:.2f} seconds")
 
-        # Return upscaled image
         return send_file(cache_path, mimetype='image/png')
 
     except Exception as e:
@@ -222,10 +200,8 @@ def get_stats():
 if __name__ == '__main__':
     logger.info("Starting AI Reading Upscale Server...")
 
-    # Initialize model
     if not init_upscaler():
         logger.error("Failed to initialize upscaler. Exiting.")
         exit(1)
 
-    # Run Flask app
     app.run(host='127.0.0.1', port=5000, debug=False, threaded=True)

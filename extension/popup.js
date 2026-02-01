@@ -1,10 +1,6 @@
-// Popup script for AI Reading Upscale Extension
-
-// DOM elements - Tabs
 const tabBtns = document.querySelectorAll('.tab-btn');
 const tabContents = document.querySelectorAll('.tab-content');
 
-// DOM elements - Current Page Tab
 const pageImagesDetected = document.getElementById('pageImagesDetected');
 const pageImagesUpscaled = document.getElementById('pageImagesUpscaled');
 const pageProgressBar = document.getElementById('pageProgressBar');
@@ -12,7 +8,6 @@ const pageProgressText = document.getElementById('pageProgressText');
 const pageQueueSection = document.getElementById('pageQueueSection');
 const pageQueueList = document.getElementById('pageQueueList');
 
-// DOM elements - Statistics Tab
 const cacheCount = document.getElementById('cacheCount');
 const cacheSize = document.getElementById('cacheSize');
 const queueSize = document.getElementById('queueSize');
@@ -23,45 +18,34 @@ const statsHistory = document.getElementById('statsHistory');
 const clearCacheBtn = document.getElementById('clearCacheBtn');
 const checkServerBtn = document.getElementById('checkServerBtn');
 
-// Toggle Extension
 const toggleExtension = document.getElementById('toggleExtension');
 const extensionStatus = document.getElementById('extensionStatus');
 const serverStatus = document.getElementById('serverStatus');
 
-// Initialize popup
 init();
 
 /**
  * Initialize popup
  */
 function init() {
-  // Setup tab switching
   tabBtns.forEach(btn => {
     btn.addEventListener('click', handleTabSwitch);
   });
 
-  // Load saved state
   chrome.storage.local.get(['enabled'], (result) => {
     const enabled = result.enabled !== undefined ? result.enabled : true;
     toggleExtension.checked = enabled;
     updateExtensionStatus(enabled);
   });
 
-  // Check server status
   checkServer();
-
-  // Load statistics
   loadStatistics();
-
-  // Load current page statistics
   loadPageStatistics();
 
-  // Set up event listeners
   toggleExtension.addEventListener('change', handleToggle);
   clearCacheBtn.addEventListener('click', handleClearCache);
   checkServerBtn.addEventListener('click', handleCheckServer);
 
-  // Listen for messages from content script
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'PAGE_STATS_UPDATE') {
       updatePageStatistics(request.data);
@@ -75,11 +59,9 @@ function init() {
 function handleTabSwitch(event) {
   const tabName = event.target.dataset.tab;
 
-  // Update active tab button
   tabBtns.forEach(btn => btn.classList.remove('active'));
   event.target.classList.add('active');
 
-  // Update active tab content
   tabContents.forEach(content => content.classList.remove('active'));
   document.getElementById(`${tabName}-tab`).classList.add('active');
 
@@ -95,21 +77,15 @@ function handleTabSwitch(event) {
 function handleToggle() {
   const enabled = toggleExtension.checked;
 
-  // Save to storage
   chrome.storage.local.set({ enabled });
-
-  // Update UI
   updateExtensionStatus(enabled);
 
-  // Notify all tabs
   chrome.tabs.query({}, (tabs) => {
     tabs.forEach((tab) => {
       chrome.tabs.sendMessage(tab.id, {
         type: 'TOGGLE_EXTENSION',
         enabled
-      }).catch(() => {
-        // Tab might not have content script, ignore error
-      });
+      }).catch(() => {}); // Tab might not have content script
     });
   });
 }
@@ -160,7 +136,6 @@ function updateServerStatus(status, text) {
  */
 async function loadStatistics() {
   try {
-    // Get queue size from background
     const statusResponse = await chrome.runtime.sendMessage({
       type: 'GET_STATUS'
     });
@@ -169,7 +144,6 @@ async function loadStatistics() {
       queueSize.textContent = statusResponse.queueSize || 0;
     }
 
-    // Get cache stats from server
     const response = await fetch('http://127.0.0.1:5000/stats');
     if (response.ok) {
       const data = await response.json();
@@ -177,10 +151,7 @@ async function loadStatistics() {
       cacheSize.textContent = `${data.cache_size_mb || 0} MB`;
     }
 
-    // Load session statistics
     loadSessionStatistics();
-
-    // Load stats history
     loadStatsHistory();
   } catch (error) {
     console.error('Error loading statistics:', error);
@@ -234,7 +205,7 @@ function loadStatsHistory() {
     }
 
     statsHistory.innerHTML = '';
-    
+
     // Display last 10 sessions
     sessions.slice(-10).reverse().forEach((session) => {
       const sessionDiv = document.createElement('div');
@@ -264,12 +235,9 @@ function loadStatsHistory() {
  * Load page statistics
  */
 function loadPageStatistics() {
-  // Get current tab
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (tabs.length > 0) {
       const tabId = tabs[0].id;
-      
-      // Request page stats from content script
       chrome.tabs.sendMessage(tabId, {
         type: 'GET_PAGE_STATS'
       }, (response) => {
@@ -299,7 +267,6 @@ function updatePageStatistics(stats) {
   pageProgressBar.style.width = percentage + '%';
   pageProgressText.textContent = percentage + '%';
 
-  // Show/hide queue section
   if (stats.queue && stats.queue.length > 0) {
     pageQueueSection.style.display = 'block';
     renderPageQueue(stats.queue);
@@ -328,10 +295,7 @@ function createQueueItem(item) {
   div.className = 'queue-item';
   div.dataset.imageId = item.id;
 
-  // Get status text and icon
   const statusInfo = getStatusInfo(item.status);
-
-  // Calculate elapsed time
   const elapsed = Math.round((Date.now() - item.startTime) / 1000);
 
   div.innerHTML = `
@@ -378,7 +342,6 @@ function truncateUrl(url) {
   const maxLength = 40;
   if (url.length <= maxLength) return url;
 
-  // Try to extract filename
   const parts = url.split('/');
   const filename = parts[parts.length - 1];
 
@@ -410,18 +373,14 @@ async function loadQueue() {
  * Render processing queue
  */
 function renderQueue(queue) {
-  // Show/hide queue section based on queue length
   if (queue.length === 0) {
     pageQueueSection.style.display = 'none';
     return;
   }
 
   pageQueueSection.style.display = 'block';
-
-  // Clear existing items
   pageQueueList.innerHTML = '';
 
-  // Render each queue item
   queue.forEach((item) => {
     const queueItem = createQueueItem(item);
     pageQueueList.appendChild(queueItem);
@@ -441,7 +400,6 @@ async function handleClearCache() {
     });
 
     if (response.success) {
-      // Reload statistics
       await loadStatistics();
       showMessage('Cache cleared successfully');
     } else {
