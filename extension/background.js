@@ -97,7 +97,7 @@ async function checkServerHealth() {
  * Handle image upscale request
  */
 async function handleUpscaleRequest(request, tabId) {
-  const { imageUrl, imageId } = request;
+  const { imageUrl, imageId, imageData } = request;
 
   if (processingQueue.has(imageId)) {
     return { success: false, error: 'Already processing this image' };
@@ -112,8 +112,18 @@ async function handleUpscaleRequest(request, tabId) {
 
   try {
     updateProgress(imageId, 'queued', 0, imageUrl);
-    updateProgress(imageId, 'fetching', 20, imageUrl);
-    const imageBlob = await fetchImageWithRetry(imageUrl);
+
+    let imageBlob;
+
+    // Use base64 data if provided (fetched by content script), otherwise fetch URL
+    if (imageData) {
+      updateProgress(imageId, 'converting', 20, imageUrl);
+      imageBlob = await dataUrlToBlob(imageData);
+    } else {
+      updateProgress(imageId, 'fetching', 20, imageUrl);
+      imageBlob = await fetchImageWithRetry(imageUrl);
+    }
+
     updateProgress(imageId, 'uploading', 40, imageUrl);
     const upscaledBlob = await upscaleImage(imageBlob, imageId);
     updateProgress(imageId, 'converting', 90, imageUrl);
@@ -214,6 +224,14 @@ function blobToDataUrl(blob) {
     reader.onerror = reject;
     reader.readAsDataURL(blob);
   });
+}
+
+/**
+ * Convert data URL to blob
+ */
+async function dataUrlToBlob(dataUrl) {
+  const response = await fetch(dataUrl);
+  return response.blob();
 }
 
 /**

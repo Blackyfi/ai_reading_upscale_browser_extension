@@ -62,7 +62,7 @@ function init() {
           ...pageStats,
           queue: imageQueue.map((item) => ({
             id: item.imageId,
-            imageUrl: item.img.src,
+            imageUrl: item.actualUrl || getActualImageUrl(item.img) || item.img.src,
             status: item.status || 'queued',
             progress: item.progress || 0,
             startTime: item.startTime || Date.now()
@@ -114,6 +114,32 @@ function detectAndProcessImages() {
   images.forEach((img) => {
     processImage(img);
   });
+}
+
+/**
+ * Get the actual image URL, handling lazy-loading patterns
+ * Some sites (like Webtoons) use data-url attribute for lazy loading
+ */
+function getActualImageUrl(img) {
+  // Check for data-url attribute (used by Webtoons)
+  const dataUrl = img.getAttribute('data-url');
+  if (dataUrl && !dataUrl.includes('bg_transparency') && !dataUrl.includes('placeholder')) {
+    return dataUrl;
+  }
+
+  // Check for data-src attribute (common lazy loading pattern)
+  const dataSrc = img.getAttribute('data-src');
+  if (dataSrc && !dataSrc.includes('bg_transparency') && !dataSrc.includes('placeholder')) {
+    return dataSrc;
+  }
+
+  // Check if current src is a placeholder
+  const src = img.src || '';
+  if (src.includes('bg_transparency') || src.includes('placeholder')) {
+    return null; // No actual URL available yet
+  }
+
+  return src;
 }
 
 /**
@@ -173,9 +199,13 @@ function isUIElement(img) {
     // On viewer pages, only process actual chapter content images
     // Chapter content images have class "_images" and are in the #_imageList container
     // Episode thumbnails have class "_thumbnailImages" and should be skipped
-    if (className.includes('_images')) {
+    if (className.includes('_images') && !className.includes('_thumbnailimages')) {
+      // Get the actual URL (might be in data-url for lazy-loaded images)
+      const actualUrl = getActualImageUrl(img);
+      const urlToCheck = (actualUrl || src).toLowerCase();
+
       // Filter out any remaining thumbnails by URL pattern
-      if (src.includes('/thumb_') || src.includes('thumb_poster')) {
+      if (urlToCheck.includes('/thumb_') || urlToCheck.includes('thumb_poster')) {
         return true;
       }
       return false; // This is actual chapter content
@@ -217,9 +247,29 @@ function isUIElement(img) {
  */
 async function processImage(img) {
   if (!isEnabled) return;
-  if (!img.src) return;
 
-  if (isAnimatedImage(img.src)) {
+  // Get actual image URL (handles lazy-loading patterns)
+  const actualUrl = getActualImageUrl(img);
+  if (!actualUrl) {
+    // Image might still be lazy loading, add observer
+    if (!img.dataset.urlObserverAdded) {
+      img.dataset.urlObserverAdded = 'true';
+      const observer = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+          if (mutation.type === 'attributes' &&
+              (mutation.attributeName === 'src' || mutation.attributeName === 'data-url')) {
+            observer.disconnect();
+            delete img.dataset.urlObserverAdded;
+            processImage(img);
+          }
+        });
+      });
+      observer.observe(img, { attributes: true, attributeFilter: ['src', 'data-url'] });
+    }
+    return;
+  }
+
+  if (isAnimatedImage(actualUrl)) {
     return;
   }
 
@@ -249,6 +299,7 @@ async function processImage(img) {
   const queueItem = {
     img,
     imageId,
+    actualUrl, // Store the actual URL for upscaling
     status: 'queued',
     progress: 0,
     startTime: Date.now()
@@ -265,7 +316,7 @@ async function processImage(img) {
 function updatePageStatsQueue() {
   pageStats.queue = imageQueue.map((item) => ({
     id: item.imageId,
-    imageUrl: item.img.src,
+    imageUrl: item.actualUrl || getActualImageUrl(item.img) || item.img.src,
     status: item.status || 'queued',
     progress: item.progress || 0,
     startTime: item.startTime || Date.now()
@@ -275,6 +326,83 @@ function updatePageStatsQueue() {
     type: 'PAGE_STATS_UPDATE',
     data: pageStats
   }).catch(() => {}); // Popup not open
+}
+
+/**
+ * Extract image data using canvas (works for already-loaded images)
+ * This bypasses CORS since the image is already rendered in the DOM
+ */
+async function extractImageAsBase64(img, imageUrl) {
+  return new Promise((resolve, reject) => {
+    try {
+      // Create a temporary image to ensure it's fully loaded
+      const tempImg = new Image();
+      tempImg.crossOrigin = 'anonymous';
+
+      tempImg.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = tempImg.naturalWidth;
+          canvas.height = tempImg.naturalHeight;
+
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(tempImg, 0, 0);
+
+          // Try to get as JPEG for smaller size, fallback to PNG
+          let dataUrl;
+          try {
+            dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+          } catch (e) {
+            dataUrl = canvas.toDataURL('image/png');
+          }
+
+          resolve(dataUrl);
+        } catch (canvasError) {
+          // Canvas tainted - fall back to fetch method
+          console.warn('Canvas tainted, trying fetch fallback:', canvasError);
+          fetchImageAsBase64Fallback(imageUrl).then(resolve).catch(reject);
+        }
+      };
+
+      tempImg.onerror = () => {
+        // Image failed to load with crossOrigin, try fetch fallback
+        fetchImageAsBase64Fallback(imageUrl).then(resolve).catch(reject);
+      };
+
+      // Try loading with the actual URL
+      tempImg.src = imageUrl;
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+/**
+ * Fallback: Fetch image without credentials (for CDNs that don't require auth)
+ */
+async function fetchImageAsBase64Fallback(imageUrl) {
+  try {
+    // Try without credentials first (works for public CDNs like Webtoon)
+    const response = await fetch(imageUrl, {
+      mode: 'cors',
+      credentials: 'omit'
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch (error) {
+    console.error('Failed to fetch image:', error);
+    throw error;
+  }
 }
 
 /**
@@ -288,13 +416,21 @@ async function processQueue() {
 
   while (imageQueue.length > 0) {
     const queueItem = imageQueue.shift();
-    const { img, imageId } = queueItem;
+    const { img, imageId, actualUrl } = queueItem;
+
+    // Use actualUrl if available, otherwise get it again
+    const imageUrl = actualUrl || getActualImageUrl(img) || img.src;
 
     try {
       const startTime = Date.now();
+
+      // Extract image data using canvas or fetch fallback
+      const imageBase64 = await extractImageAsBase64(img, imageUrl);
+
       const response = await chrome.runtime.sendMessage({
         type: 'UPSCALE_IMAGE',
-        imageUrl: img.src,
+        imageData: imageBase64,  // Send base64 data instead of URL
+        imageUrl: imageUrl,      // Keep URL for reference/logging
         imageId: imageId
       });
 
@@ -333,11 +469,26 @@ async function processQueue() {
  * Check if image meets criteria for upscaling
  */
 function meetsImageCriteria(img) {
-  const width = img.naturalWidth;
-  const height = img.naturalHeight;
+  let width = img.naturalWidth;
+  let height = img.naturalHeight;
+
+  // For lazy-loaded images, naturalWidth/Height might be from placeholder
+  // Check if src is a placeholder and we have explicit dimensions
+  const actualUrl = getActualImageUrl(img);
+  const isPlaceholderLoaded = img.src && (img.src.includes('bg_transparency') || img.src.includes('placeholder'));
+
+  if (isPlaceholderLoaded && actualUrl) {
+    // Use explicit width/height attributes if available (common on Webtoons)
+    const attrWidth = parseInt(img.getAttribute('width'), 10);
+    const attrHeight = parseInt(img.getAttribute('height'), 10);
+    if (attrWidth > 0 && attrHeight > 0) {
+      width = attrWidth;
+      height = attrHeight;
+    }
+  }
 
   // Wait for lazy-loaded images to have dimensions
-  if (width === 0 || height === 0 || !img.complete) {
+  if (width === 0 || height === 0 || (!img.complete && !isPlaceholderLoaded)) {
     if (!img.dataset.loadListenerAdded) {
       img.dataset.loadListenerAdded = 'true';
       img.addEventListener('load', () => {
@@ -360,10 +511,11 @@ function meetsImageCriteria(img) {
 }
 
 /**
- * Generate unique ID for image using base64 encoded src
+ * Generate unique ID for image using base64 encoded actual URL
  */
 function getImageId(img) {
-  return btoa(img.src);
+  const actualUrl = getActualImageUrl(img) || img.src;
+  return btoa(actualUrl);
 }
 
 /**
