@@ -682,13 +682,31 @@ async function processQueue() {
       const imageBase64 = await extractImageAsBase64(img, imageUrl);
       debugLog('Queue', `Step 1 COMPLETE: Got base64 (${imageBase64?.length} chars)`);
 
+      // Check if image is too large
+      const imageSizeMB = imageBase64?.length / 1024 / 1024;
+      if (imageSizeMB > 20) {
+        debugError('Queue', `Image is too large (${imageSizeMB.toFixed(2)} MB), skipping`);
+        showNotification('Image Too Large', `Image is ${imageSizeMB.toFixed(1)}MB - skipping to avoid memory issues.`, 'warning');
+        removeLoadingIndicator(img);
+        continue; // Skip to next image
+      }
+
       debugLog('Queue', `Step 2: Sending UPSCALE_IMAGE to background...`);
+      debugLog('Queue', `Message size: ${imageBase64?.length} chars (${imageSizeMB.toFixed(2)} MB)`);
+
       const response = await chrome.runtime.sendMessage({
         type: 'UPSCALE_IMAGE',
         imageData: imageBase64,
         imageUrl: imageUrl,
         imageId: imageId
+      }).catch(err => {
+        debugError('Queue', `chrome.runtime.sendMessage failed: ${err.message}`, err);
+        throw new Error(`Failed to send message to background: ${err.message}`);
       });
+
+      if (chrome.runtime.lastError) {
+        throw new Error(`Chrome runtime error: ${chrome.runtime.lastError.message}`);
+      }
 
       debugLog('Queue', `Step 2 COMPLETE: Got response`, {
         success: response?.success,
@@ -696,6 +714,10 @@ async function processQueue() {
         dataUrlLength: response?.dataUrl?.length,
         error: response?.error
       });
+
+      if (!response) {
+        throw new Error('No response from background script - message may have failed to send');
+      }
 
       if (response.success) {
         const endTime = Date.now();
@@ -711,10 +733,31 @@ async function processQueue() {
       } else {
         debugError('Queue', `FAILED: Upscale returned error: ${response?.error}`);
         removeLoadingIndicator(img);
+
+        // Show notification if server is not available
+        if (response?.error && response.error.includes('Server not available')) {
+          showNotification('AI Upscale Server Not Running', 'Please start the upscale server at http://127.0.0.1:5000', 'error');
+        } else if (response?.error && response.error.includes('timed out')) {
+          showNotification('AI Upscale Timeout', 'The upscale server took too long to respond. It may be overloaded.', 'warning');
+        }
       }
     } catch (error) {
       debugError('Queue', `EXCEPTION during processing: ${error.message}`, error);
       removeLoadingIndicator(img);
+
+      // Show notification for errors
+      if (error.message.includes('Extension context invalidated')) {
+        debugLog('Queue', 'Extension was reloaded, stopping queue processing');
+        isProcessingQueue = false;
+        return; // Exit the queue processing
+      } else if (error.message.includes('message may have failed to send')) {
+        showNotification('Message Send Failed', 'The image may be too large to send to the upscale server.', 'error');
+      } else {
+        showNotification('Upscale Error', error.message, 'error');
+      }
+
+      // Continue processing next image even if this one failed
+      debugLog('Queue', `Continuing to next image in queue...`);
     }
 
     updatePageStatsQueue();
@@ -845,6 +888,86 @@ function removeLoadingIndicator(img) {
     delete img.dataset.originalOpacity;
     delete img.dataset.originalVisibility;
   }
+}
+
+/**
+ * Show a notification to the user
+ */
+let lastNotificationTime = 0;
+const NOTIFICATION_COOLDOWN = 10000; // 10 seconds between notifications
+
+function showNotification(title, message, type = 'info') {
+  // Prevent notification spam
+  const now = Date.now();
+  if (now - lastNotificationTime < NOTIFICATION_COOLDOWN) {
+    debugLog('Notification', 'Skipping notification (cooldown active)');
+    return;
+  }
+  lastNotificationTime = now;
+
+  const notification = document.createElement('div');
+  notification.style.cssText = `
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: ${type === 'error' ? '#ff4444' : type === 'warning' ? '#ff9800' : '#4CAF50'};
+    color: white;
+    padding: 16px 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    z-index: 999999;
+    max-width: 400px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    animation: slideIn 0.3s ease-out;
+  `;
+
+  notification.innerHTML = `
+    <div style="font-weight: 600; margin-bottom: 4px;">${title}</div>
+    <div style="opacity: 0.95;">${message}</div>
+  `;
+
+  document.body.appendChild(notification);
+
+  // Remove after 5 seconds
+  setTimeout(() => {
+    notification.style.animation = 'slideOut 0.3s ease-in';
+    setTimeout(() => {
+      if (notification.parentNode) {
+        notification.parentNode.removeChild(notification);
+      }
+    }, 300);
+  }, 5000);
+}
+
+// Add notification animations
+if (!document.getElementById('ai-upscale-notification-styles')) {
+  const style = document.createElement('style');
+  style.id = 'ai-upscale-notification-styles';
+  style.textContent = `
+    @keyframes slideIn {
+      from {
+        transform: translateX(400px);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+    @keyframes slideOut {
+      from {
+        transform: translateX(0);
+        opacity: 1;
+      }
+      to {
+        transform: translateX(400px);
+        opacity: 0;
+      }
+    }
+  `;
+  document.head.appendChild(style);
 }
 
 // =============================================================================

@@ -1,6 +1,7 @@
 const SERVER_URL = 'http://127.0.0.1:5000';
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
+const FETCH_TIMEOUT = 30000; // 30 seconds timeout for fetch requests
 const DEBUG = true;
 
 // Map<imageId, {status, progress, startTime, imageUrl}>
@@ -109,21 +110,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
  */
 async function checkServerHealth() {
   try {
-    const response = await fetch(`${SERVER_URL}/health`, {
+    debugLog('Health', `Checking server health at ${SERVER_URL}/health...`);
+    const response = await fetchWithTimeout(`${SERVER_URL}/health`, {
       method: 'GET',
       mode: 'cors'
-    });
+    }, 5000); // 5 second timeout for health checks
 
     if (response.ok) {
       const data = await response.json();
       serverAvailable = data.status === 'healthy';
+      debugLog('Health', `Server is ${serverAvailable ? 'healthy' : 'unhealthy'}`);
       return serverAvailable;
     } else {
       serverAvailable = false;
+      debugError('Health', `Server returned status ${response.status}`);
       return false;
     }
   } catch (error) {
     serverAvailable = false;
+    debugError('Health', `Server health check failed: ${error.message}`);
     return false;
   }
 }
@@ -222,7 +227,7 @@ async function fetchImageWithRetry(url, retries = MAX_RETRIES) {
   for (let i = 0; i < retries; i++) {
     try {
       debugLog('FetchRetry', `Attempt ${i + 1}/${retries}...`);
-      const response = await fetch(url);
+      const response = await fetchWithTimeout(url, {}, FETCH_TIMEOUT);
       debugLog('FetchRetry', `Response: status=${response.status}, ok=${response.ok}, type=${response.type}`);
 
       if (!response.ok) {
@@ -264,11 +269,11 @@ async function upscaleImage(imageBlob, imageId, retries = MAX_RETRIES) {
       }
 
       debugLog('UpscaleServer', `POSTing to ${SERVER_URL}/upscale`);
-      const response = await fetch(`${SERVER_URL}/upscale`, {
+      const response = await fetchWithTimeout(`${SERVER_URL}/upscale`, {
         method: 'POST',
         body: formData,
         mode: 'cors'
-      });
+      }, 120000); // 2 minute timeout for upscaling
 
       debugLog('UpscaleServer', `Response: status=${response.status}, ok=${response.ok}`);
 
@@ -334,10 +339,10 @@ async function fetchImageAsBase64(imageUrl) {
  */
 async function clearServerCache() {
   try {
-    const response = await fetch(`${SERVER_URL}/clear-cache`, {
+    const response = await fetchWithTimeout(`${SERVER_URL}/clear-cache`, {
       method: 'POST',
       mode: 'cors'
-    });
+    }, 10000); // 10 second timeout
 
     if (!response.ok) {
       throw new Error(`Server error! status: ${response.status}`);
@@ -355,10 +360,10 @@ async function clearServerCache() {
  */
 async function getModels() {
   try {
-    const response = await fetch(`${SERVER_URL}/models`, {
+    const response = await fetchWithTimeout(`${SERVER_URL}/models`, {
       method: 'GET',
       mode: 'cors'
-    });
+    }, 10000); // 10 second timeout
 
     if (!response.ok) {
       throw new Error(`Server error! status: ${response.status}`);
@@ -376,14 +381,14 @@ async function getModels() {
  */
 async function switchModel(modelKey) {
   try {
-    const response = await fetch(`${SERVER_URL}/switch-model`, {
+    const response = await fetchWithTimeout(`${SERVER_URL}/switch-model`, {
       method: 'POST',
       mode: 'cors',
       headers: {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({ model: modelKey })
-    });
+    }, 30000); // 30 second timeout
 
     if (!response.ok) {
       const data = await response.json();
@@ -399,6 +404,29 @@ async function switchModel(modelKey) {
 
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Fetch with timeout
+ */
+async function fetchWithTimeout(url, options = {}, timeout = FETCH_TIMEOUT) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error(`Request timed out after ${timeout}ms`);
+    }
+    throw error;
+  }
 }
 
 // Periodic health check every 30 seconds

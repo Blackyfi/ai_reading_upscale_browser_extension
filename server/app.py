@@ -384,7 +384,11 @@ def upscale_image():
 
         image_hash = get_image_hash(image_bytes)
         model_scale = MODELS[current_model]['scale']
-        cache_key = f"{image_hash}_{current_model}"
+
+        # Use x2 output for x4 models, otherwise use native scale
+        output_scale = 2 if model_scale == 4 else model_scale
+
+        cache_key = f"{image_hash}_{current_model}_x{output_scale}"
         cache_path = CACHE_FOLDER / f"{cache_key}.png"
 
         if cache_path.exists():
@@ -398,8 +402,8 @@ def upscale_image():
 
         img_np = np.array(image)
 
-        logger.info(f"Upscaling image {image_hash} with model '{current_model}' (x{model_scale})...")
-        output, _ = upscaler.enhance(img_np, outscale=model_scale)
+        logger.info(f"Upscaling image {image_hash} with model '{current_model}' (native x{model_scale}, output x{output_scale})...")
+        output, _ = upscaler.enhance(img_np, outscale=output_scale)
 
         output_image = Image.fromarray(output)
         output_image.save(cache_path, 'PNG')
