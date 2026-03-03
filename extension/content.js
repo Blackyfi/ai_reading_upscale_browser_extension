@@ -655,9 +655,14 @@ async function processImage(img) {
     return;
   }
 
-  // Skip if already processed
+  // Skip if already processed — but serve from cache if this DOM element wasn't replaced yet
   if (processedImages.has(imageId)) {
-    debugLog('Process', `SKIP: Already processed`, { url: actualUrl?.substring(0, 80) });
+    if (imageCache.has(imageId) && !img.dataset.upscaled) {
+      debugLog('Process', `CACHE HIT: Applying cached upscale to new DOM element`, { url: actualUrl?.substring(0, 80) });
+      replaceImage(img, imageCache.get(imageId));
+    } else {
+      debugLog('Process', `SKIP: Already processed`, { url: actualUrl?.substring(0, 80) });
+    }
     return;
   }
 
