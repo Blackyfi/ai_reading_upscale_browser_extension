@@ -840,11 +840,16 @@ function detectAndProcessImages() {
 function replaceImage(img, dataUrl) {
   img.dataset.originalSrc = img.src;
   img.dataset.upscaled = 'true';
+  // Keep the image hidden until the browser finishes decoding the data URL.
+  // Setting src immediately makes opacity '1' would show a blank frame while
+  // the browser decodes the image asynchronously.
+  img.addEventListener('load', () => {
+    img.style.opacity = img.dataset.originalOpacity || '1';
+    img.style.visibility = img.dataset.originalVisibility || 'visible';
+    delete img.dataset.originalOpacity;
+    delete img.dataset.originalVisibility;
+  }, { once: true });
   img.src = dataUrl;
-  img.style.opacity = '1';
-  img.style.visibility = 'visible';
-  delete img.dataset.originalOpacity;
-  delete img.dataset.originalVisibility;
 }
 
 /**
@@ -923,6 +928,11 @@ function removeLoadingIndicator(img) {
     img.loadingOverlay = null;
     delete img.dataset.loadingOverlay;
   }
+
+  // On the success path, replaceImage owns visibility restoration via its load
+  // event listener — skip here to avoid a race where we reveal the image before
+  // the browser has finished decoding the new data URL.
+  if (img.dataset.upscaled) return;
 
   if (img.style.opacity === '0' || img.style.visibility === 'hidden') {
     img.style.opacity = img.dataset.originalOpacity || '1';
