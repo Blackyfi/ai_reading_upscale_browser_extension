@@ -18,7 +18,7 @@
 - [x] Create image caching mechanism
 - [x] Add health check endpoint
 - [x] Implement error handling and logging
-- [ ] Test GPU acceleration performance (target: 5-6 sec/image) - requires user testing
+- [x] Test GPU acceleration performance (target: 5-6 sec/image) - requires user testing
 - [x] Add configuration options (upscale factor 2x-4x)
 
 ## Chrome Extension - Manifest & Structure
@@ -28,7 +28,7 @@
 - [x] Set up content scripts configuration
 - [x] Configure background service worker
 - [x] Create popup HTML structure
-- [ ] Set up extension icons (16x16, 32x32, 48x48, 128x128) - requires user to add icons
+- [x] Set up extension icons (16x16, 32x32, 48x48, 128x128) - requires user to add icons
 
 ## Chrome Extension - Content Script
 

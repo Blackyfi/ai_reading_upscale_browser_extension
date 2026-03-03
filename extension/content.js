@@ -92,6 +92,13 @@ const SITE_HANDLERS = {
     isMangaImage: asuraIsMangaImage,
     getImageUrl: asuraGetImageUrl,
     needsBackgroundFetch: true // Asura CDN does NOT support CORS
+  },
+  'demonicscans.org': {
+    name: 'DemonicScans',
+    isReadingPage: demonicIsReadingPage,
+    isMangaImage: demonicIsMangaImage,
+    getImageUrl: demonicGetImageUrl,
+    needsBackgroundFetch: true // Images served from external CDN (demoniclibs.com / librarydm.com)
   }
 };
 
@@ -208,6 +215,36 @@ function asuraGetImageUrl(img) {
   const url = img.src || null;
   debugLog('Asura', `getImageUrl: ${url}`);
   return url;
+}
+
+// =============================================================================
+// DEMONICSCANS SITE HANDLER
+// =============================================================================
+
+function demonicIsReadingPage() {
+  // Chapter pages have /chapter/ in the URL path
+  return window.location.pathname.includes('/chapter/');
+}
+
+function demonicIsMangaImage(img) {
+  const className = img.className ? img.className.toLowerCase() : '';
+  const src = img.src || '';
+
+  // Chapter images use the 'imgholder' class
+  if (!className.includes('imgholder')) {
+    return false;
+  }
+
+  // Chapter images are served from the CDN domains; filter out local site images (ads, etc.)
+  if (!src.includes('demoniclibs.com') && !src.includes('librarydm.com')) {
+    return false;
+  }
+
+  return true;
+}
+
+function demonicGetImageUrl(img) {
+  return img.src || null;
 }
 
 // =============================================================================
