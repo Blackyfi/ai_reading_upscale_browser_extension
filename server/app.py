@@ -74,7 +74,7 @@ model_loading = False
 class SpandrelUpscaler:
     """Wrapper for spandrel models to match RealESRGANer interface"""
 
-    def __init__(self, model_path, scale, tile=512, tile_pad=10, half=True, device='cuda'):
+    def __init__(self, model_path, scale, tile=640, tile_pad=16, half=True, device='cuda'):
         self.scale = scale
         self.tile = tile
         self.tile_pad = tile_pad
@@ -217,8 +217,8 @@ def init_upscaler(model_key='general_x2'):
             upscaler = SpandrelUpscaler(
                 model_path=str(model_path),
                 scale=scale,
-                tile=512,
-                tile_pad=10,
+                tile=640,
+                tile_pad=16,
                 half=True,
                 device='cuda'
             )
@@ -235,8 +235,8 @@ def init_upscaler(model_key='general_x2'):
                 scale=scale,
                 model_path=str(model_path),
                 model=model,
-                tile=512,
-                tile_pad=10,
+                tile=640,
+                tile_pad=16,
                 pre_pad=0,
                 half=True,
                 device='cuda'
@@ -254,8 +254,8 @@ def init_upscaler(model_key='general_x2'):
                 scale=scale,
                 model_path=str(model_path),
                 model=model,
-                tile=512,
-                tile_pad=10,
+                tile=640,
+                tile_pad=16,
                 pre_pad=0,
                 half=True,
                 device='cuda'
@@ -407,12 +407,8 @@ def upscale_image():
 
         output_image = Image.fromarray(output)
         output_image.save(cache_path, 'PNG')
-
-        # Clean up GPU memory
         del output
-        gc.collect()
         torch.cuda.empty_cache()
-        torch.cuda.synchronize()
 
         elapsed_time = time.time() - start_time
         logger.info(f"Upscaling completed in {elapsed_time:.2f} seconds")
