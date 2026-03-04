@@ -99,6 +99,13 @@ const SITE_HANDLERS = {
     isMangaImage: demonicIsMangaImage,
     getImageUrl: demonicGetImageUrl,
     needsBackgroundFetch: true // Images served from external CDN (demoniclibs.com / librarydm.com)
+  },
+  'en-thunderscans.com': {
+    name: 'ThunderScans',
+    isReadingPage: thunderscansIsReadingPage,
+    isMangaImage: thunderscansIsMangaImage,
+    getImageUrl: thunderscansGetImageUrl,
+    needsBackgroundFetch: true
   }
 };
 
@@ -244,6 +251,36 @@ function demonicIsMangaImage(img) {
 }
 
 function demonicGetImageUrl(img) {
+  return img.src || null;
+}
+
+// =============================================================================
+// THUNDERSCANS SITE HANDLER
+// =============================================================================
+
+function thunderscansIsReadingPage() {
+  // Chapter reading pages contain the #readerarea element and chapterbody class
+  return !!document.querySelector('#readerarea') || !!document.querySelector('.chapterbody');
+}
+
+function thunderscansIsMangaImage(img) {
+  const className = img.className || '';
+  const src = img.src || '';
+
+  // Chapter images use the 'ts-main-image' class
+  if (!className.includes('ts-main-image')) {
+    return false;
+  }
+
+  // Images are served from wp-content/uploads/manga/
+  if (!src.includes('/wp-content/uploads/manga/')) {
+    return false;
+  }
+
+  return true;
+}
+
+function thunderscansGetImageUrl(img) {
   return img.src || null;
 }
 
@@ -689,7 +726,9 @@ async function processImage(img) {
   // Sort queue by vertical position
   imageQueue.sort((a, b) => a.verticalPosition - b.verticalPosition);
   updatePageStatsQueue();
-  addLoadingIndicator(img);
+  // Don't hide the original image yet — keep it visible so the user can read
+  // while earlier images are being upscaled. The loading indicator will be
+  // added only when this image starts being actively processed.
   processQueue();
 }
 
@@ -715,6 +754,9 @@ async function processQueue() {
 
     const imageUrl = actualUrl || currentSiteHandler.getImageUrl(img) || img.src;
     debugLog('Queue', `Processing image: ${imageUrl?.substring(0, 80)}...`);
+
+    // Show loading indicator only when actively processing this image
+    addLoadingIndicator(img);
 
     try {
       const startTime = Date.now();
@@ -866,8 +908,8 @@ function addLoadingIndicator(img) {
     img.style.width = width + 'px';
     img.style.height = height + 'px';
   }
-  img.style.opacity = '0';
-  img.style.visibility = 'hidden';
+  img.style.opacity = '0.3';
+  img.style.visibility = 'visible';
 
   const overlay = document.createElement('div');
   overlay.className = 'ai-upscale-loading';
