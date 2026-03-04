@@ -89,7 +89,7 @@ class AutoTuner:
         if not torch.cuda.is_available():
             return
         props = torch.cuda.get_device_properties(0)
-        self.total_vram = props.total_mem
+        self.total_vram = props.total_memory
         initial_tile = self._vram_to_tile(self.total_vram)
         logger.info(f"AutoTuner: GPU {props.name}, VRAM {self.total_vram / (1024**3):.1f}GB, initial tile {initial_tile}px")
 

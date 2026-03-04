@@ -882,16 +882,31 @@ function detectAndProcessImages() {
 function replaceImage(img, dataUrl) {
   img.dataset.originalSrc = img.src;
   img.dataset.upscaled = 'true';
-  // Keep the image hidden until the browser finishes decoding the data URL.
-  // Setting src immediately makes opacity '1' would show a blank frame while
-  // the browser decodes the image asynchronously.
-  img.addEventListener('load', () => {
+
+  const restoreVisibility = () => {
     img.style.opacity = img.dataset.originalOpacity || '1';
     img.style.visibility = img.dataset.originalVisibility || 'visible';
     delete img.dataset.originalOpacity;
     delete img.dataset.originalVisibility;
-  }, { once: true });
+  };
+
   img.src = dataUrl;
+
+  // Use decode() for reliable detection of when the image is ready to display.
+  // Falls back to a load event listener, plus a safety timeout in case neither fires
+  // (e.g. site scripts intercept the src change).
+  if (typeof img.decode === 'function') {
+    img.decode().then(restoreVisibility).catch(restoreVisibility);
+  } else {
+    img.addEventListener('load', restoreVisibility, { once: true });
+    img.addEventListener('error', restoreVisibility, { once: true });
+    // Safety fallback: restore visibility after 2s no matter what
+    setTimeout(() => {
+      if (img.style.opacity !== (img.dataset.originalOpacity || '1')) {
+        restoreVisibility();
+      }
+    }, 2000);
+  }
 }
 
 /**
@@ -971,12 +986,12 @@ function removeLoadingIndicator(img) {
     delete img.dataset.loadingOverlay;
   }
 
-  // On the success path, replaceImage owns visibility restoration via its load
-  // event listener — skip here to avoid a race where we reveal the image before
-  // the browser has finished decoding the new data URL.
+  // On the success path, replaceImage owns visibility restoration via decode/load.
   if (img.dataset.upscaled) return;
 
-  if (img.style.opacity === '0' || img.style.visibility === 'hidden') {
+  // Restore original opacity on failure/cancellation. Check for any non-normal
+  // opacity value (loading state uses '0.3').
+  if (img.dataset.originalOpacity !== undefined || img.style.opacity !== '' && img.style.opacity !== '1') {
     img.style.opacity = img.dataset.originalOpacity || '1';
     img.style.visibility = img.dataset.originalVisibility || 'visible';
     delete img.dataset.originalOpacity;
