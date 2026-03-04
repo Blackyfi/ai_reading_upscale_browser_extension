@@ -11,6 +11,9 @@ const pageQueueList = document.getElementById('pageQueueList');
 const cacheCount = document.getElementById('cacheCount');
 const cacheSize = document.getElementById('cacheSize');
 const queueSize = document.getElementById('queueSize');
+const vramUsage = document.getElementById('vramUsage');
+const tileSize = document.getElementById('tileSize');
+const tunerStatus = document.getElementById('tunerStatus');
 const totalImagesUpscaled = document.getElementById('totalImagesUpscaled');
 const avgUpscaleTime = document.getElementById('avgUpscaleTime');
 const totalSessionTime = document.getElementById('totalSessionTime');
@@ -153,6 +156,20 @@ async function loadStatistics() {
       const data = await response.json();
       cacheCount.textContent = data.cache_count || 0;
       cacheSize.textContent = `${data.cache_size_mb || 0} MB`;
+
+      // Update auto-tuner stats
+      if (data.auto_tuner) {
+        const tuner = data.auto_tuner;
+        vramUsage.textContent = tuner.total_vram_mb
+          ? `${tuner.current_vram_mb}/${Math.round(tuner.total_vram_mb / 1024)}GB (${tuner.vram_usage_pct}%)`
+          : '-';
+        tileSize.textContent = tuner.tile_size
+          ? `${tuner.tile_size}px (pad ${tuner.tile_padding})`
+          : '-';
+        tunerStatus.textContent = tuner.converged === true
+          ? 'Converged'
+          : tuner.converged === false ? 'Adapting...' : '-';
+      }
     }
 
     loadSessionStatistics();

@@ -67,8 +67,121 @@ MODELS = {
 
 # Global upscaler instance and current model
 upscaler = None
-current_model = 'general_x2'
+current_model = 'anime_x4'
 model_loading = False
+
+
+class AutoTuner:
+    """Automatically adjusts tile size and padding based on GPU capabilities and runtime metrics."""
+
+    MIN_TILE = 128
+    MAX_TILE = 1024
+    VRAM_HEADROOM = 0.85  # Use at most 85% of VRAM
+    VRAM_LOW = 0.50       # Below 50% means we can try larger tiles
+    STABLE_THRESHOLD = 5  # Lock in after N stable iterations
+
+    def __init__(self):
+        self.total_vram = 0
+        self.model_profiles = {}  # {model_key: {'tile': int, 'stable_count': int}}
+        self._detect_gpu()
+
+    def _detect_gpu(self):
+        if not torch.cuda.is_available():
+            return
+        props = torch.cuda.get_device_properties(0)
+        self.total_vram = props.total_mem
+        initial_tile = self._vram_to_tile(self.total_vram)
+        logger.info(f"AutoTuner: GPU {props.name}, VRAM {self.total_vram / (1024**3):.1f}GB, initial tile {initial_tile}px")
+
+    def _vram_to_tile(self, vram_bytes):
+        """Pick initial tile size based on total VRAM."""
+        gb = vram_bytes / (1024 ** 3)
+        if gb >= 12:
+            return 768
+        elif gb >= 8:
+            return 512
+        elif gb >= 6:
+            return 384
+        elif gb >= 4:
+            return 256
+        else:
+            return 192
+
+    def _calc_padding(self, tile):
+        """Tile padding scales with tile size, clamped 8-32."""
+        return max(8, min(32, tile // 40))
+
+    def get_params(self, model_key):
+        """Get current tile size and padding for a model."""
+        if model_key not in self.model_profiles:
+            self.model_profiles[model_key] = {
+                'tile': self._vram_to_tile(self.total_vram) if self.total_vram else 640,
+                'stable_count': 0,
+            }
+        profile = self.model_profiles[model_key]
+        return profile['tile'], self._calc_padding(profile['tile'])
+
+    def is_locked(self, model_key):
+        """Check if this model's profile has converged."""
+        profile = self.model_profiles.get(model_key)
+        return profile is not None and profile['stable_count'] >= self.STABLE_THRESHOLD
+
+    def record_result(self, model_key, elapsed_seconds, image_pixels):
+        """After an upscale, adjust tile size based on VRAM usage."""
+        if self.total_vram == 0:
+            return
+
+        profile = self.model_profiles.get(model_key)
+        if profile is None or profile['stable_count'] >= self.STABLE_THRESHOLD:
+            return  # Already converged
+
+        peak_vram = torch.cuda.max_memory_allocated(0)
+        vram_ratio = peak_vram / self.total_vram
+        old_tile = profile['tile']
+
+        if vram_ratio > self.VRAM_HEADROOM:
+            # Too much VRAM used — shrink tiles
+            new_tile = max(self.MIN_TILE, int(old_tile * 0.75))
+            profile['stable_count'] = 0
+            logger.info(f"AutoTuner [{model_key}]: VRAM {vram_ratio:.0%} > {self.VRAM_HEADROOM:.0%}, "
+                        f"tile {old_tile} -> {new_tile}")
+        elif vram_ratio < self.VRAM_LOW and elapsed_seconds < 5:
+            # Plenty of headroom and fast — try larger tiles for speed
+            new_tile = min(self.MAX_TILE, int(old_tile * 1.25))
+            profile['stable_count'] = 0
+            logger.info(f"AutoTuner [{model_key}]: VRAM {vram_ratio:.0%} < {self.VRAM_LOW:.0%}, "
+                        f"tile {old_tile} -> {new_tile}")
+        else:
+            new_tile = old_tile
+            profile['stable_count'] += 1
+            if profile['stable_count'] == self.STABLE_THRESHOLD:
+                logger.info(f"AutoTuner [{model_key}]: Converged at tile {old_tile}")
+
+        # Round to multiple of 32 for GPU alignment
+        new_tile = (new_tile // 32) * 32
+        new_tile = max(self.MIN_TILE, min(self.MAX_TILE, new_tile))
+        profile['tile'] = new_tile
+
+        # Reset peak tracking for next image
+        torch.cuda.reset_peak_memory_stats(0)
+
+    def get_status(self, model_key=None):
+        """Return current tuning status for API responses."""
+        status = {
+            'total_vram_mb': round(self.total_vram / (1024 ** 2)) if self.total_vram else 0,
+            'current_vram_mb': round(torch.cuda.memory_allocated(0) / (1024 ** 2)) if torch.cuda.is_available() else 0,
+            'vram_usage_pct': round(torch.cuda.memory_allocated(0) / self.total_vram * 100, 1) if self.total_vram else 0,
+        }
+        if model_key and model_key in self.model_profiles:
+            profile = self.model_profiles[model_key]
+            status['tile_size'] = profile['tile']
+            status['tile_padding'] = self._calc_padding(profile['tile'])
+            status['converged'] = profile['stable_count'] >= self.STABLE_THRESHOLD
+        return status
+
+
+# Global auto-tuner instance
+auto_tuner = AutoTuner()
 
 
 class SpandrelUpscaler:
@@ -212,13 +325,17 @@ def init_upscaler(model_key='general_x2'):
         scale = model_config.get('scale', 2)
         num_block = model_config.get('num_block', 23)
 
+        # Get auto-tuned tile parameters
+        tile_size, tile_pad = auto_tuner.get_params(model_key)
+        logger.info(f"Using auto-tuned tile={tile_size}, tile_pad={tile_pad}")
+
         if model_config['arch'] == 'spandrel':
             # Use spandrel for models with non-standard architectures
             upscaler = SpandrelUpscaler(
                 model_path=str(model_path),
                 scale=scale,
-                tile=640,
-                tile_pad=16,
+                tile=tile_size,
+                tile_pad=tile_pad,
                 half=True,
                 device='cuda'
             )
@@ -235,8 +352,8 @@ def init_upscaler(model_key='general_x2'):
                 scale=scale,
                 model_path=str(model_path),
                 model=model,
-                tile=640,
-                tile_pad=16,
+                tile=tile_size,
+                tile_pad=tile_pad,
                 pre_pad=0,
                 half=True,
                 device='cuda'
@@ -254,8 +371,8 @@ def init_upscaler(model_key='general_x2'):
                 scale=scale,
                 model_path=str(model_path),
                 model=model,
-                tile=640,
-                tile_pad=16,
+                tile=tile_size,
+                tile_pad=tile_pad,
                 pre_pad=0,
                 half=True,
                 device='cuda'
@@ -298,7 +415,8 @@ def health_check():
         'model_loaded': model_loaded,
         'current_model': current_model,
         'model_name': MODELS[current_model]['name'] if current_model in MODELS else None,
-        'model_loading': model_loading
+        'model_loading': model_loading,
+        'auto_tuner': auto_tuner.get_status(current_model)
     })
 
 
@@ -402,8 +520,28 @@ def upscale_image():
 
         img_np = np.array(image)
 
+        # Apply auto-tuned tile size before processing
+        if not auto_tuner.is_locked(current_model):
+            tile_size, tile_pad = auto_tuner.get_params(current_model)
+            if hasattr(upscaler, 'tile'):
+                upscaler.tile = tile_size
+                upscaler.tile_pad = tile_pad
+            elif hasattr(upscaler, 'tile_size'):
+                upscaler.tile_size = tile_size
+                upscaler.tile_pad = tile_pad
+
+        # Reset peak memory stats before processing
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(0)
+
+        image_pixels = img_np.shape[0] * img_np.shape[1]
         logger.info(f"Upscaling image {image_hash} with model '{current_model}' (native x{model_scale}, output x{output_scale})...")
+        enhance_start = time.time()
         output, _ = upscaler.enhance(img_np, outscale=output_scale)
+        enhance_elapsed = time.time() - enhance_start
+
+        # Feed metrics back to auto-tuner
+        auto_tuner.record_result(current_model, enhance_elapsed, image_pixels)
 
         output_image = Image.fromarray(output)
         output_image.save(cache_path, 'PNG')
@@ -449,7 +587,8 @@ def get_stats():
             'cache_size_mb': round(cache_size / (1024 * 1024), 2),
             'gpu_available': torch.cuda.is_available(),
             'current_model': current_model,
-            'model_name': MODELS[current_model]['name'] if current_model in MODELS else None
+            'model_name': MODELS[current_model]['name'] if current_model in MODELS else None,
+            'auto_tuner': auto_tuner.get_status(current_model)
         })
     except Exception as e:
         logger.error(f"Error getting stats: {e}")
@@ -459,7 +598,7 @@ def get_stats():
 if __name__ == '__main__':
     logger.info("Starting AI Reading Upscale Server...")
 
-    if not init_upscaler():
+    if not init_upscaler('anime_x4'):
         logger.error("Failed to initialize upscaler. Exiting.")
         exit(1)
 
