@@ -106,6 +106,13 @@ const SITE_HANDLERS = {
     isMangaImage: thunderscansIsMangaImage,
     getImageUrl: thunderscansGetImageUrl,
     needsBackgroundFetch: true
+  },
+  'utoon.net': {
+    name: 'Utoon',
+    isReadingPage: utoonIsReadingPage,
+    isMangaImage: utoonIsMangaImage,
+    getImageUrl: utoonGetImageUrl,
+    needsBackgroundFetch: true
   }
 };
 
@@ -282,6 +289,37 @@ function thunderscansIsMangaImage(img) {
 
 function thunderscansGetImageUrl(img) {
   return img.src || null;
+}
+
+// =============================================================================
+// UTOON SITE HANDLER (Madara / WP-Manga theme)
+// =============================================================================
+
+function utoonIsReadingPage() {
+  // Madara theme reading pages have the 'reading-manga' body class and /chapter-* in URL
+  return document.body.classList.contains('reading-manga') ||
+         /\/chapter-\d+/.test(window.location.pathname);
+}
+
+function utoonIsMangaImage(img) {
+  const src = img.src || '';
+
+  // Chapter images are served from /wp-content/uploads/WP-manga/data/
+  if (!src.includes('/wp-content/uploads/WP-manga/data/')) {
+    return false;
+  }
+
+  // Verify the image is inside the reading content area
+  const readingContent = img.closest('.reading-content');
+  if (!readingContent) {
+    return false;
+  }
+
+  return true;
+}
+
+function utoonGetImageUrl(img) {
+  return img.src ? img.src.trim() : null;
 }
 
 // =============================================================================
