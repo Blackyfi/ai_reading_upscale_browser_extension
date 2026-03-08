@@ -881,32 +881,14 @@ function detectAndProcessImages() {
  */
 function replaceImage(img, dataUrl) {
   img.dataset.originalSrc = img.src;
+  // Remove loading overlay attribute first so CSS stops applying 0.3 opacity
+  delete img.dataset.loadingOverlay;
+  // Setting data-upscaled makes the CSS rule `img[data-upscaled="true"] { opacity: 1 !important }`
+  // kick in immediately and persistently — no site JS can override it.
   img.dataset.upscaled = 'true';
-
-  const restoreVisibility = () => {
-    img.style.opacity = img.dataset.originalOpacity || '1';
-    img.style.visibility = img.dataset.originalVisibility || 'visible';
-    delete img.dataset.originalOpacity;
-    delete img.dataset.originalVisibility;
-  };
-
   img.src = dataUrl;
-
-  // Use decode() for reliable detection of when the image is ready to display.
-  // Falls back to a load event listener, plus a safety timeout in case neither fires
-  // (e.g. site scripts intercept the src change).
-  if (typeof img.decode === 'function') {
-    img.decode().then(restoreVisibility).catch(restoreVisibility);
-  } else {
-    img.addEventListener('load', restoreVisibility, { once: true });
-    img.addEventListener('error', restoreVisibility, { once: true });
-    // Safety fallback: restore visibility after 2s no matter what
-    setTimeout(() => {
-      if (img.style.opacity !== (img.dataset.originalOpacity || '1')) {
-        restoreVisibility();
-      }
-    }, 2000);
-  }
+  delete img.dataset.originalOpacity;
+  delete img.dataset.originalVisibility;
 }
 
 /**
@@ -923,8 +905,8 @@ function addLoadingIndicator(img) {
     img.style.width = width + 'px';
     img.style.height = height + 'px';
   }
-  img.style.opacity = '0.3';
-  img.style.visibility = 'visible';
+  //img.style.setProperty('opacity', '0.3', 'important');
+  img.style.setProperty('visibility', 'visible', 'important');
 
   const overlay = document.createElement('div');
   overlay.className = 'ai-upscale-loading';
@@ -954,17 +936,8 @@ function addLoadingIndicator(img) {
 
   overlay.appendChild(spinner);
 
-  if (!document.getElementById('ai-upscale-styles')) {
-    const style = document.createElement('style');
-    style.id = 'ai-upscale-styles';
-    style.textContent = `
-      @keyframes ai-upscale-spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-      }
-    `;
-    document.head.appendChild(style);
-  }
+  // Ensure styles are injected (in case startImageDetection hasn't run yet)
+  injectUpscaleStyles();
 
   const parent = img.parentElement;
   if (parent && parent.style.position !== 'relative' && parent.style.position !== 'absolute') {
@@ -992,8 +965,8 @@ function removeLoadingIndicator(img) {
   // Restore original opacity on failure/cancellation. Check for any non-normal
   // opacity value (loading state uses '0.3').
   if (img.dataset.originalOpacity !== undefined || img.style.opacity !== '' && img.style.opacity !== '1') {
-    img.style.opacity = img.dataset.originalOpacity || '1';
-    img.style.visibility = img.dataset.originalVisibility || 'visible';
+    img.style.setProperty('opacity', img.dataset.originalOpacity || '1', 'important');
+    img.style.setProperty('visibility', img.dataset.originalVisibility || 'visible', 'important');
     delete img.dataset.originalOpacity;
     delete img.dataset.originalVisibility;
   }
@@ -1151,7 +1124,31 @@ function saveSessionStatistics() {
 /**
  * Start image detection with MutationObserver
  */
+function injectUpscaleStyles() {
+  if (document.getElementById('ai-upscale-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'ai-upscale-styles';
+  style.textContent = `
+    @keyframes ai-upscale-spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    /* Force upscaled images to be fully visible regardless of site CSS/JS */
+    img[data-upscaled="true"] {
+      opacity: 1 !important;
+      visibility: visible !important;
+    }
+    /* Force loading state to be visible at reduced opacity */
+    img[data-loading-overlay="true"] {
+      opacity: 1 !important;
+      visibility: visible !important;
+    }
+  `;
+  (document.head || document.documentElement).appendChild(style);
+}
+
 function startImageDetection() {
+  injectUpscaleStyles();
   detectAndProcessImages();
 
   const observer = new MutationObserver((mutations) => {
