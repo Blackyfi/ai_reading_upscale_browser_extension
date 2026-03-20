@@ -93,6 +93,13 @@ const SITE_HANDLERS = {
     getImageUrl: asuraGetImageUrl,
     needsBackgroundFetch: true // Asura CDN does NOT support CORS
   },
+  'asurascans.com': {
+    name: 'AsuraScans',
+    isReadingPage: asuraIsReadingPage,
+    isMangaImage: asuraIsMangaImage,
+    getImageUrl: asuraGetImageUrl,
+    needsBackgroundFetch: true // Asura CDN does NOT support CORS
+  },
   'demonicscans.org': {
     name: 'DemonicScans',
     isReadingPage: demonicIsReadingPage,
@@ -190,11 +197,16 @@ function webtoonGetImageUrl(img) {
 // =============================================================================
 
 function asuraIsReadingPage() {
-  // AsuraScans chapter pages typically have chapter in URL or specific page structure
-  // Check if we're on a page with manga images
+  const url = window.location.href;
+  // New layout: asurascans.com/comics/{slug}/chapter/{num}
+  const hasChapterInUrl = /\/comics\/[^/]+\/chapter\/\d+/.test(url);
+  // New layout: images from cdn.asurascans.com
+  const hasCdnImages = document.querySelector('img[src*="cdn.asurascans.com/asura-images/chapters/"]') !== null;
+  // Old layout: /storage/media/ images
   const hasMediaImages = document.querySelector('img[src*="/storage/media/"]') !== null;
-  debugLog('Asura', `isReadingPage check: hasMediaImages=${hasMediaImages}, URL=${window.location.href}`);
-  return hasMediaImages;
+  const result = hasChapterInUrl || hasCdnImages || hasMediaImages;
+  debugLog('Asura', `isReadingPage check: hasChapterInUrl=${hasChapterInUrl}, hasCdnImages=${hasCdnImages}, hasMediaImages=${hasMediaImages}, URL=${url}`);
+  return result;
 }
 
 function asuraIsMangaImage(img) {
@@ -203,25 +215,36 @@ function asuraIsMangaImage(img) {
 
   debugLog('Asura', `Checking image: src="${src.substring(0, 100)}..."`, { alt, className: img.className });
 
-  // Only process images from the storage/media path (actual chapter images)
-  if (!src.includes('/storage/media/')) {
-    debugLog('Asura', `SKIP: Image does not contain /storage/media/ in src`);
+  // New layout: images from cdn.asurascans.com/asura-images/chapters/
+  if (src.includes('cdn.asurascans.com/asura-images/chapters/')) {
+    // Verify it's inside a data-page container (chapter page wrapper)
+    const pageWrapper = img.closest('[data-page]');
+    if (pageWrapper) {
+      debugLog('Asura', `ACCEPTED: CDN chapter image inside data-page container`);
+      return true;
+    }
+    // Even without data-page, accept if it matches the chapter image URL pattern
+    const isChapterImage = /\/chapters\/[^/]+\/\d+\/\d+\.\w+/.test(src);
+    if (isChapterImage) {
+      debugLog('Asura', `ACCEPTED: CDN chapter image matching URL pattern`);
+      return true;
+    }
+    debugLog('Asura', `SKIP: CDN image but not a chapter page image`);
     return false;
   }
 
-  // Check for chapter page pattern: /storage/media/{id}/{number}.jpg
-  const isChapterPage = /\/storage\/media\/\d+\/(\d{2}\.(jpg|png|webp)|conversions\/\d{2}-optimized\.(jpg|png|webp))/.test(src);
-  const hasChapterAlt = alt.includes('chapter page');
-
-  debugLog('Asura', `Pattern check: isChapterPage=${isChapterPage}, hasChapterAlt=${hasChapterAlt}`);
-
-  if (!isChapterPage && !hasChapterAlt) {
-    debugLog('Asura', `SKIP: Does not match chapter page pattern or alt text`);
-    return false;
+  // Old layout: /storage/media/ path
+  if (src.includes('/storage/media/')) {
+    const isChapterPage = /\/storage\/media\/\d+\/(\d{2}\.(jpg|png|webp)|conversions\/\d{2}-optimized\.(jpg|png|webp))/.test(src);
+    const hasChapterAlt = alt.includes('chapter page');
+    if (isChapterPage || hasChapterAlt) {
+      debugLog('Asura', `ACCEPTED: Old layout chapter image`);
+      return true;
+    }
   }
 
-  debugLog('Asura', `ACCEPTED: Image is a valid manga image`);
-  return true;
+  debugLog('Asura', `SKIP: Does not match any Asura image pattern`);
+  return false;
 }
 
 function asuraGetImageUrl(img) {
@@ -925,6 +948,16 @@ function replaceImage(img, dataUrl) {
   // kick in immediately and persistently — no site JS can override it.
   img.dataset.upscaled = 'true';
   img.src = dataUrl;
+  // Force full opacity inline as well — some sites (e.g. AsuraScans) use framework-driven
+  // transitions/lazy-load CSS that can override even !important stylesheet rules.
+  img.style.setProperty('opacity', '1', 'important');
+  img.style.setProperty('visibility', 'visible', 'important');
+  // Also ensure the parent container is fully visible (some sites fade the wrapper div)
+  const parent = img.parentElement;
+  if (parent) {
+    parent.style.setProperty('opacity', '1', 'important');
+    parent.style.setProperty('visibility', 'visible', 'important');
+  }
   delete img.dataset.originalOpacity;
   delete img.dataset.originalVisibility;
 }
@@ -1199,13 +1232,34 @@ function startImageDetection() {
           images.forEach(processImage);
         }
       });
+      // Also catch attribute changes (e.g. src set on existing img)
+      if (mutation.type === 'attributes' && mutation.target.nodeName === 'IMG') {
+        processImage(mutation.target);
+      }
     });
   });
 
   observer.observe(document.body, {
     childList: true,
-    subtree: true
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['src', 'data-src', 'data-url']
   });
+
+  // Periodic rescan for sites with lazy-loading that adds images on scroll
+  // (e.g. AsuraScans only injects <img> when scrolled into viewport)
+  let rescanInterval = setInterval(() => {
+    if (!isEnabled) return;
+    const images = document.querySelectorAll('img');
+    images.forEach((img) => {
+      if (!img.dataset.upscaled && !img.dataset.loadListenerAdded && !img.dataset.urlObserverAdded) {
+        processImage(img);
+      }
+    });
+  }, 2000);
+
+  // Clean up interval when page unloads
+  window.addEventListener('beforeunload', () => clearInterval(rescanInterval));
 }
 
 /**
