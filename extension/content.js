@@ -98,7 +98,8 @@ const SITE_HANDLERS = {
     isReadingPage: asuraIsReadingPage,
     isMangaImage: asuraIsMangaImage,
     getImageUrl: asuraGetImageUrl,
-    needsBackgroundFetch: true // Asura CDN does NOT support CORS
+    needsBackgroundFetch: true, // Asura CDN does NOT support CORS
+    forceLoadImages: asuraForceLoadImages
   },
   'demonicscans.org': {
     name: 'DemonicScans',
@@ -252,6 +253,56 @@ function asuraGetImageUrl(img) {
   const url = img.src || null;
   debugLog('Asura', `getImageUrl: ${url}`);
   return url;
+}
+
+/**
+ * Force all lazy-loaded images to load on AsuraScans.
+ * The site only injects <img> elements when their container scrolls into view.
+ * We scroll through the page quickly to trigger the site's IntersectionObserver,
+ * then scroll back to where the user was.
+ */
+function asuraForceLoadImages() {
+  // Delay to let the site's framework finish rendering data-page containers
+  setTimeout(() => {
+    const pageContainers = document.querySelectorAll('[data-page]');
+    if (pageContainers.length === 0) {
+      debugLog('Asura', 'No [data-page] containers found, retrying in 2s');
+      setTimeout(asuraForceLoadImages, 2000);
+      return;
+    }
+
+    const unloadedPages = Array.from(pageContainers).filter(
+      (div) => !div.querySelector('img')
+    );
+
+    if (unloadedPages.length === 0) {
+      debugLog('Asura', 'All pages already have images loaded');
+      return;
+    }
+
+    debugLog('Asura', `Force-loading ${unloadedPages.length}/${pageContainers.length} lazy pages by scrolling`);
+
+    const savedScrollY = window.scrollY;
+    let index = 0;
+
+    function scrollToNext() {
+      if (index >= unloadedPages.length) {
+        // All done — scroll back to where the user was
+        window.scrollTo({ top: savedScrollY, behavior: 'instant' });
+        debugLog('Asura', 'Force-load scroll complete, restored scroll position');
+        // Trigger a rescan now that images should be in the DOM
+        setTimeout(() => detectAndProcessImages(), 500);
+        return;
+      }
+      const page = unloadedPages[index];
+      page.scrollIntoView({ behavior: 'instant', block: 'center' });
+      index++;
+      // 150ms delay to let the site's IntersectionObserver fire and React render the <img>
+      setTimeout(scrollToNext, 150);
+    }
+
+    scrollToNext();
+  }, 1000);
 }
 
 // =============================================================================
@@ -694,6 +745,11 @@ async function fetchImageViaBackground(imageUrl) {
 async function processImage(img) {
   const imgSrc = img.src?.substring(0, 80) || 'no-src';
 
+  // Skip already upscaled images immediately
+  if (img.dataset.upscaled) {
+    return;
+  }
+
   if (!isEnabled) {
     debugLog('Process', `SKIP: Extension is disabled`, { src: imgSrc });
     return;
@@ -938,6 +994,41 @@ function detectAndProcessImages() {
 // =============================================================================
 
 /**
+ * Force an upscaled image (and its parent) to stay fully visible.
+ * Watches for the site's JS resetting opacity/visibility and immediately undoes it.
+ */
+function enforceVisibility(img) {
+  function applyFull(el) {
+    el.style.setProperty('opacity', '1', 'important');
+    el.style.setProperty('visibility', 'visible', 'important');
+    // Strip CSS transitions/animations that cause fade effects
+    el.style.setProperty('transition', 'none', 'important');
+  }
+
+  applyFull(img);
+  const parent = img.parentElement;
+  if (parent) applyFull(parent);
+
+  // Guard against the site's JS constantly re-setting styles on the element
+  if (!img._upscaleVisibilityObserver) {
+    const guard = new MutationObserver(() => {
+      if (img.style.opacity !== '1' || img.style.visibility !== 'visible') {
+        applyFull(img);
+      }
+      if (parent && (parent.style.opacity !== '1' || parent.style.visibility !== 'visible')) {
+        applyFull(parent);
+      }
+    });
+    // Watch style attribute changes on both the image and its parent
+    guard.observe(img, { attributes: true, attributeFilter: ['style', 'class'] });
+    if (parent) {
+      guard.observe(parent, { attributes: true, attributeFilter: ['style', 'class'] });
+    }
+    img._upscaleVisibilityObserver = guard;
+  }
+}
+
+/**
  * Replace image with upscaled version
  */
 function replaceImage(img, dataUrl) {
@@ -948,16 +1039,8 @@ function replaceImage(img, dataUrl) {
   // kick in immediately and persistently — no site JS can override it.
   img.dataset.upscaled = 'true';
   img.src = dataUrl;
-  // Force full opacity inline as well — some sites (e.g. AsuraScans) use framework-driven
-  // transitions/lazy-load CSS that can override even !important stylesheet rules.
-  img.style.setProperty('opacity', '1', 'important');
-  img.style.setProperty('visibility', 'visible', 'important');
-  // Also ensure the parent container is fully visible (some sites fade the wrapper div)
-  const parent = img.parentElement;
-  if (parent) {
-    parent.style.setProperty('opacity', '1', 'important');
-    parent.style.setProperty('visibility', 'visible', 'important');
-  }
+  // Force full opacity inline and protect against the site's JS constantly resetting it
+  enforceVisibility(img);
   delete img.dataset.originalOpacity;
   delete img.dataset.originalVisibility;
 }
@@ -1205,9 +1288,13 @@ function injectUpscaleStyles() {
       100% { transform: rotate(360deg); }
     }
     /* Force upscaled images to be fully visible regardless of site CSS/JS */
-    img[data-upscaled="true"] {
+    img[data-upscaled="true"],
+    img[data-upscaled="true"] ~ *,
+    [data-page]:has(> img[data-upscaled="true"]) {
       opacity: 1 !important;
       visibility: visible !important;
+      transition: none !important;
+      animation: none !important;
     }
     /* Force loading state to be visible at reduced opacity */
     img[data-loading-overlay="true"] {
@@ -1220,6 +1307,12 @@ function injectUpscaleStyles() {
 
 function startImageDetection() {
   injectUpscaleStyles();
+
+  // Force lazy-loaded images to load (e.g. AsuraScans only adds <img> on scroll)
+  if (currentSiteHandler.forceLoadImages) {
+    currentSiteHandler.forceLoadImages();
+  }
+
   detectAndProcessImages();
 
   const observer = new MutationObserver((mutations) => {
@@ -1232,18 +1325,12 @@ function startImageDetection() {
           images.forEach(processImage);
         }
       });
-      // Also catch attribute changes (e.g. src set on existing img)
-      if (mutation.type === 'attributes' && mutation.target.nodeName === 'IMG') {
-        processImage(mutation.target);
-      }
     });
   });
 
   observer.observe(document.body, {
     childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ['src', 'data-src', 'data-url']
+    subtree: true
   });
 
   // Periodic rescan for sites with lazy-loading that adds images on scroll
